@@ -1,0 +1,26 @@
+from litellm import acompletion
+from litellm.exceptions import APIConnectionError, OpenAIError, Timeout
+
+from .config import get_settings
+
+
+async def ask_local_model(prompt: str) -> str:
+    settings = get_settings()
+    try:
+        response = await acompletion(
+            model=f"ollama/{settings.local_model}",
+            api_base=settings.ollama_base_url,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=30,
+            num_retries=0,
+        )
+    except Timeout:
+        raise RuntimeError(
+            "O modelo local excedeu o tempo limite de 30 segundos."
+        ) from None
+    except APIConnectionError:
+        raise RuntimeError("Não foi possível conectar ao Ollama local.") from None
+    except OpenAIError:
+        raise RuntimeError("O provedor do modelo local retornou um erro.") from None
+    content = response.choices[0].message.content
+    return content if isinstance(content, str) else ""
