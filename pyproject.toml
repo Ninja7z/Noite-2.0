@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "noite-assistant"
+version = "0.1.0"
+description = "Assistente desktop Noite 2.0"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "litellm>=1.101,<2",
+    "pydantic>=2.12,<3",
+    "pydantic-settings>=2.16,<3",
+    "python-dotenv>=1,<2",
+]
+
+[project.optional-dependencies]
+desktop = ["PySide6-Essentials>=6.10,<7"]
+windows = ["pywinauto>=0.6.9"]
+dev = ["pytest>=8,<10", "ruff>=0.14,<1"]
+
+[project.scripts]
+noite = "noite.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
