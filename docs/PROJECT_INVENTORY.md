@@ -24,7 +24,7 @@
 - `ruff check .`: passou.
 - CLI `python -m noite --cli`: inicia; chamada real a Ollama retornou `TESTE_OK` nesta continuação.
 - UI real no Windows: a versão reformulada exibiu `Ollama conectado` e respondeu `UI_OK` via Ollama; os testes de ciclo de vida e MCP continuam passando.
-- GitHub Actions: a validação previamente registrada para `dc5e2b9` passou em Ubuntu e Windows (Ruff, testes e smoke test do CLI). As alterações locais de UI/empacotamento ainda precisam de nova validação remota após publicação.
+- GitHub Actions: o commit `5ae95ea` passou em Ubuntu e Windows (Ruff, testes e smoke test do CLI).
 - `.env` não está rastreado; `.env.example` é o único arquivo dessa família versionado.
 
 ## Empacotamento Windows

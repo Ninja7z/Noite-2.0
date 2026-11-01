@@ -30,7 +30,7 @@ Construir uma assistente desktop local-first funcional sem executar ações arbi
 - GUI: janela real inspecionada no Windows após a reformulação; status exibiu Ollama conectado e resposta `UI_OK` apareceu no chat. Streaming do Ollama foi observado e cancelado na interface; encerramento ocorreu e resposta parcial foi confirmada no SQLite temporário. Testes offscreen cobrem conexão de sinais, fechamento e cancelamento.
 - Lançador desktop: build PyInstaller concluído; o `Noite.exe` em `C:\Users\crist\OneDrive\Desktop` abriu o app. O teste usou dados temporários e preservou `%USERPROFILE%\.noite`.
 - CLI: `python -m noite --cli` iniciou, saiu por `/sair` e fez chamada real ao modelo local, retornando `TESTE_OK`.
-- CI: a validação previamente registrada para o commit `dc5e2b9`, Ruff, os 35 testes e o smoke test do CLI passaram em Ubuntu e Windows pelo GitHub Actions.
+- CI: o commit `5ae95ea`, Ruff, os 35 testes e o smoke test do CLI passaram em Ubuntu e Windows pelo GitHub Actions.
 - Congelamento standalone de Qt: não validado; cx_Freeze e PyInstaller reproduziram erro ao importar QtWidgets no teste local, e Nuitka parou ao compilar LiteLLM. O lançador desktop não inclui runtime/dependências.
 
 ## Pendências
@@ -55,8 +55,8 @@ Construir uma assistente desktop local-first funcional sem executar ações arbi
 - Branch atual: `codex/stabilize-core`.
 - Repositório oficial confirmado pelo usuário: `Ninja7z/Noite-2.0`.
 - PR #1 (`codex/stabilize-core` → `main`) segue aberto como draft, sem merge; head publicado `dc5e2b9`.
-- O `origin` local ainda aponta para `cristnzx/Noite-2.0`; antes de sincronizar, apontá-lo para `https://github.com/Ninja7z/Noite-2.0.git` e conferir novamente o head remoto.
+- O `origin` local aponta para `https://github.com/Ninja7z/Noite-2.0.git`; branch sincronizada até `5ae95ea`.
 
 ## Próxima ação
 
-A branch local contém mudanças de UI e empacotamento ainda não commitadas. Publicar somente na branch `codex/stabilize-core` do repositório oficial e atualizar o PR #1; manter draft e não fazer merge.
+PR #1 atualizado na branch `codex/stabilize-core`, ainda draft, aberto e sem merge. A interface reformulada e as instruções do lançador foram publicadas; o CI passou em Ubuntu e Windows. Antes de entregar, sincronizar a atualização final deste registro de CI.
