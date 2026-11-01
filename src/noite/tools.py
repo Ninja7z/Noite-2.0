@@ -17,22 +17,32 @@ def search_workspace(root: Path, query: str, limit: int = 20) -> list[str]:
     needle = query.strip().casefold()
 
     for current, directories, filenames in os.walk(allowed_root, followlinks=False):
-        directories[:] = [
-            name
-            for name in directories
-            if not name.startswith(".") and not (Path(current) / name).is_symlink()
-        ]
+        visible_directories = []
+        for name in directories:
+            visited += 1
+            candidate_dir = Path(current) / name
+            if (
+                visited >= 5000
+                or name.startswith(".")
+                or candidate_dir.is_symlink()
+                or (hasattr(candidate_dir, "is_junction") and candidate_dir.is_junction())
+            ):
+                continue
+            visible_directories.append(name)
+        directories[:] = visible_directories
         for name in filenames:
             visited += 1
+            if visited > 5000:
+                return matches
+            if name.startswith("."):
+                continue
             candidate = Path(current) / name
-            try:
-                candidate.resolve().relative_to(allowed_root)
-            except (OSError, ValueError):
+            if candidate.is_symlink() or (
+                hasattr(candidate, "is_junction") and candidate.is_junction()
+            ):
                 continue
             if needle in name.casefold():
                 matches.append(str(candidate.relative_to(allowed_root)))
                 if len(matches) >= max_results:
                     return matches
-            if visited >= 5000:
-                return matches
     return matches

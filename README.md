@@ -14,6 +14,10 @@ Assistente desktop local-first em português. O MVP inclui chat PySide6, respost
 
 O pipeline de voz, `sqlite-vec`, integração Roblox/Blender e demais componentes avançados pertencem às fases posteriores do relatório; não são necessários para iniciar o núcleo textual.
 
+## IDE (em desenvolvimento)
+
+Na janela, use **Abrir projeto…** para selecionar a pasta de trabalho. O dock **Projeto** mantém a árvore e abas ao lado da conversa. Nesta primeira etapa, arquivos UTF-8 até 1 MB podem ser abertos, editados e salvos manualmente; `.env`, credenciais, binários, arquivos fora do workspace e mudanças externas posteriores à abertura são bloqueados. O destaque de sintaxe inicial cobre Python. **Buscar no projeto** executa busca textual limitada em segundo plano e permite abrir o resultado na linha encontrada. O terminal, diagnósticos e operações de criação/exclusão ainda não estão implementados; acompanhe [docs/MASTER_PLAN.md](docs/MASTER_PLAN.md).
+
 ## Ambiente Windows
 
 Requer Python 3.11 ou superior. O ambiente validado para o app e o lançador nesta máquina usa Python 3.13.16.

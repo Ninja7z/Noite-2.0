@@ -1,40 +1,41 @@
-# Inventário do projeto
+# Inventário do projeto — 2026-11-01
 
 ## Checkout e Git
 
 - Checkout: `C:\Users\crist\Noite-2.0\Noite-2.0-canonical`.
-- Branch: `codex/stabilize-core`, HEAD `dc5e2b9` (`Record streaming validation results`).
-- Repositório oficial confirmado: [`Ninja7z/Noite-2.0`](https://github.com/Ninja7z/Noite-2.0).
-- PR #1 (`codex/stabilize-core` → `main`) está aberto como draft, sem merge. O head publicado é `dc5e2b9` (`Record streaming validation results`).
-- O `origin` deste checkout ainda aponta para o endereço antigo `cristnzx/Noite-2.0`; use o repositório oficial ao sincronizar. O repositório oficial foi confirmado pelo usuário e está acessível via integração GitHub.
+- Branch: `codex/stabilize-core`, HEAD local `fc62d00e95699bfc85b3a10872b107f65a04199a`.
+- `origin`: `https://github.com/Ninja7z/Noite-2.0.git`.
+- PR #1 está aberto como draft e sem merge; GitHub confirmou head remoto `fc62d00` na consulta de 2026-11-01.
+- As alterações do trabalho atual são locais e não commitadas. Nenhuma operação remota foi feita.
 
 ## Arquitetura atual
 
-- Python 3.11+; validação local neste Windows com Python 3.13.16.
-- Núcleo local-first: roteador determinístico, contratos Pydantic, `AssistantService` assíncrono e gateway LiteLLM para Ollama (`qwen2.5:3b` por padrão).
-- Interface PySide6 com chat, seleção do modelo por sessão, estado do Ollama, streaming, cancelamento e encerramento coordenado de QThread.
-- Histórico em SQLite com FTS5 e sincronização por triggers; armazenamento padrão em `%USERPROFILE%\.noite`.
-- Painel MCP stdio com configuração local, descoberta após confirmação e aprovação humana de cada chamada. O modelo não seleciona nem invoca ferramentas.
-- Ferramentas locais limitadas à consulta de nomes de arquivos na pasta de trabalho configurada; não existe execução arbitrária de comandos.
-- Voz, Vosk, CustomTkinter, ChromaDB, automação do Windows e integração Roblox não fazem parte do código atual. O material do Gemini descreve uma arquitetura alternativa/legada, não as dependências deste checkout.
+- Python 3.11+, UI PySide6, `AssistantService` assíncrono, gateway LiteLLM/Ollama.
+- Ollama local configurado em `http://127.0.0.1:11435`, modelo `qwen2.5:3b` (ver configuração efetiva no registro de engenharia).
+- Conversas persistentes em SQLite com IDs e FTS5; dados em `%USERPROFILE%\.noite`.
+- MCP stdio manual com confirmação humana por descoberta/chamada; o modelo não chama ferramentas automaticamente.
+- IDE em início: `ProjectDock` abre workspace, navega a árvore e edita arquivos UTF-8 pequenos em abas PySide6. Salvamento explícito, proteção de hash contra mudanças externas, bloqueio de segredos/binaries/caminhos externos, limite 1 MB e preservação de BOM/EOL.
+- Busca global inicial opera em background, filtra segredos/dependências e navega para arquivo/linha.
+- Ainda sem terminal, busca dentro do arquivo, diagnósticos, painel de testes, diff/Git UI ou contexto seletivo do workspace conectado ao modelo.
+- Não há execução arbitrária de comando pelo modelo.
+
+## Dados do usuário
+
+- DB existente migrado aditivamente; 22 mensagens preservadas.
+- Backup pré-migração guardado em `%USERPROFILE%\.noite\noite.sqlite3.pre-conversations-20261101-010721.bak`.
+- Workspace recente salvo localmente via `QSettings`; não armazena conteúdo do projeto.
+- `.env` não está presente nem rastreado no checkout; houve um `.env` histórico em `9af7993` com chave Anthropic vazia e configurações locais, sem segredo detectado. Nunca copiar segredos de projeto para contexto/LLM.
 
 ## Validação registrada
 
-- `pytest -q`: 35 testes passaram.
-- `ruff check .`: passou.
-- CLI `python -m noite --cli`: inicia; chamada real a Ollama retornou `TESTE_OK` nesta continuação.
-- UI real no Windows: a versão reformulada exibiu `Ollama conectado` e respondeu `UI_OK` via Ollama; os testes de ciclo de vida e MCP continuam passando.
-- GitHub Actions: o commit `5ae95ea` passou em Ubuntu e Windows (Ruff, testes e smoke test do CLI).
-- `.env` não está rastreado; `.env.example` é o único arquivo dessa família versionado.
+- Baseline antes da implementação: 35 testes e Ruff passaram.
+- Após a Fase 1: 42 testes, Ruff, diff check e CLI `/sair` passaram.
+- Fase 2 inicial: `pytest -q` — 55 passaram; Ruff, formatação dos arquivos tocados, `git diff --check` e smoke do CLI passaram. Busca validada visualmente no Windows; veja `ENGINEERING_LOG.md`.
 
-## Empacotamento Windows
+## Referências
 
-- `Noite.exe` em `C:\Users\crist\OneDrive\Desktop\Noite.exe` é um lançador local que inicia o checkout e `.venv`; não é portátil nem inclui Python, dependências, Ollama ou pesos do modelo.
-- O histórico e as configurações ficam fora do executável e sobrevivem à sua substituição.
-- Um congelamento completo do Qt falhou no ambiente atual. O diagnóstico e a reprodução estão em `docs/BUILD_WINDOWS.md`.
-
-## Materiais de referência
-
-- `docs/reference/papeis-do-projeto.pdf`, `docs/reference/snapshot-legado.pdf` e `docs/reference/pesquisa-arquitetura-original.pdf` são documentos de referência; não são importados nem executados pelo aplicativo.
-- Os três arquivos foram movidos para `docs/reference/` e receberam nomes legíveis, preservando o conteúdo. O snapshot legado é um PDF que antes não tinha extensão; o arquivo de pesquisa também tinha nome malformado.
-- `docs/PROJECT_INVENTORY.md` e `docs/CONTINUATION_STATE.md` devem ser atualizados junto de mudanças funcionais.
+- Plano vivo: `MASTER_PLAN.md`.
+- Auditoria original e evidências: `ENGINEERING_AUDIT.md`.
+- Matriz: `TEST_MATRIX.md`.
+- Build/launcher: `BUILD_WINDOWS.md`.
+- PDFs de referência em `docs/reference/` descrevem material histórico, não funcionalidades implementadas.

@@ -19,8 +19,7 @@ def main() -> int:
 
         ctypes.windll.user32.MessageBoxW(
             None,
-            "Ambiente do Noite não encontrado. Reconstrua o app com "
-            "scripts/build_windows.ps1.",
+            "Ambiente do Noite não encontrado. Reconstrua o app com scripts/build_windows.ps1.",
             "Noite 2.0",
             0x10,
         )
@@ -30,12 +29,28 @@ def main() -> int:
     source = str(root / "src")
     prior_path = env.get("PYTHONPATH")
     env["PYTHONPATH"] = source if not prior_path else source + os.pathsep + prior_path
-    subprocess.Popen(
-        [str(pythonw), "-m", "noite"],
-        cwd=root,
-        env=env,
-        close_fds=True,
-    )
+    log_path = Path.home() / ".noite" / "launcher.log"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("ab") as log_file:
+            subprocess.Popen(
+                [str(pythonw), "-m", "noite"],
+                cwd=root,
+                env=env,
+                stdout=log_file,
+                stderr=log_file,
+                close_fds=True,
+            )
+    except OSError as exc:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            f"Não foi possível iniciar o Noite ({type(exc).__name__}). Consulte o log: {log_path}",
+            "Noite 2.0",
+            0x10,
+        )
+        return 1
     return 0
 
 

@@ -16,6 +16,28 @@ def test_route_search_file() -> None:
     assert intent.parameters == {"query": "notas"}
 
 
+@pytest.mark.parametrize(
+    ("text", "kind"),
+    [
+        ("abra calculadora", IntentKind.OPEN_APPLICATION),
+        ("abre editor", IntentKind.OPEN_APPLICATION),
+        ("pesquise arquivos receitas", IntentKind.SEARCH_FILE),
+        ("busque arquivo relatório", IntentKind.SEARCH_FILE),
+        ("procure arquivos fotos", IntentKind.SEARCH_FILE),
+    ],
+)
+def test_route_understands_imperative_forms_only_for_explicit_actions(text, kind):
+    assert route(text).kind == kind
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["abril", "esporte", "arquitetura", "anote", "pesquise receitas no youtube"],
+)
+def test_route_does_not_misclassify_unrelated_phrases(text):
+    assert route(text).kind == IntentKind.CHAT
+
+
 def test_route_chat_and_preserve_original_text() -> None:
     intent = route("  Olá  ")
     assert intent.kind == IntentKind.CHAT

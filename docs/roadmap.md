@@ -1,17 +1,5 @@
-# Roadmap do MVP
+# Roadmap anterior do MVP — histórico
 
-## Fases 1 a 4 — MVP
+Este documento registra o roadmap original do núcleo e foi substituído como plano de execução pela [MASTER_PLAN.md](MASTER_PLAN.md), que inclui auditoria, IDE e critérios de segurança.
 
-1. Núcleo CLI, contratos Pydantic, configurações locais e histórico SQLite/FTS5.
-2. Roteamento hierárquico: regras determinísticas primeiro, classificador local depois e provedor de nuvem somente quando habilitado.
-3. Ferramentas Windows restritas a uma pasta de trabalho, com validação e execução sem elevação administrativa.
-4. Interface simples em PySide6 conectada ao núcleo por uma interface local desacoplada.
-
-## Fases 5 a 8 — expansão
-
-- Voz local: VAD, wake word, faster-whisper e Piper TTS.
-- Busca vetorial local via SQLite e `sqlite-vec`.
-- Integrações específicas para Roblox Studio e Blender.
-- Avaliações automatizadas, telemetria com `trace_id` e controles de privacidade completos.
-
-Não instalar os componentes da expansão até a fase correspondente; isso reduz o peso do ambiente e evita dependências desnecessárias no MVP.
+O roadmap original previa CLI, roteamento, ferramentas locais, interface PySide6 e depois expansão com voz, memória vetorial e integrações. A implementação atual e os itens realmente ausentes estão registrados no inventário e na matriz atualizados; não use este arquivo para inferir que voz, ChromaDB ou automação Windows estejam instalados.

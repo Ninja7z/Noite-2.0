@@ -3,9 +3,10 @@ import re
 from .contracts import Intent, IntentKind
 from .normalization import normalize_transcription
 
-_OPEN_APP = re.compile(r"^abrir\s+(?P<app>.+)$", re.IGNORECASE)
+_OPEN_APP = re.compile(r"(?:abrir|abra|abre)\s+(?P<app>.+)", re.IGNORECASE)
 _SEARCH_FILE = re.compile(
-    r"^(?:pesquisar|procurar|buscar)\s+(?:arquivo\s+)?(?P<query>.+)$",
+    r"(?:pesquisar|pesquise|procurar|procure|buscar|busque)\s+"
+    r"arquivos?\s+(?P<query>.+)",
     re.IGNORECASE,
 )
 

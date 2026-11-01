@@ -20,9 +20,7 @@ async def ask_local_model(
             model=f"ollama/{model or settings.local_model}",
             api_base=settings.ollama_base_url,
             messages=(
-                list(messages)
-                if messages is not None
-                else [{"role": "user", "content": prompt}]
+                list(messages) if messages is not None else [{"role": "user", "content": prompt}]
             ),
             stream=on_chunk is not None,
             timeout=timeout_seconds,

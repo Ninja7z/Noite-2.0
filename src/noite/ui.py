@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import inspect
 import json
-import shlex
+import logging
+import subprocess
 import threading
 from collections.abc import Callable
 from contextlib import closing
@@ -20,6 +22,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -29,13 +32,26 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QTextBrowser,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from .assistant import AssistantService
 from .config import get_settings
-from .store import open_database, recent_messages
+from .ide import ProjectDock
+from .logging_setup import setup_logging
+from .store import (
+    create_conversation,
+    delete_conversation,
+    get_active_conversation_id,
+    list_conversations,
+    open_database,
+    rename_conversation,
+    set_active_conversation_id,
+)
+
+logger = logging.getLogger("noite.ui")
 
 
 class InputBox(QPlainTextEdit):
@@ -73,7 +89,16 @@ class TaskThread(QThread):
         except asyncio.CancelledError:
             self.cancelled.emit()
         except Exception as exc:
-            self.failed.emit(f"{type(exc).__name__}: não foi possível concluir a operação.")
+            logger.error("Background operation failed (%s)", type(exc).__name__)
+            log_path = next(
+                (
+                    handler.baseFilename
+                    for handler in logging.getLogger("noite").handlers
+                    if isinstance(handler, logging.FileHandler)
+                ),
+                str(Path.home() / ".noite" / "logs" / "noite.log"),
+            )
+            self.failed.emit(f"{type(exc).__name__}: falha registrada em {log_path}.")
 
     def request_cancel(self) -> None:
         self._cancel_requested.set()
@@ -114,7 +139,8 @@ class NoiteWindow(QMainWindow):
         super().__init__()
         self.settings = get_settings()
         self.service = AssistantService(self.settings)
-        self.conversation_id = "default"
+        with closing(open_database(self.service.database_path)) as connection:
+            self.conversation_id = get_active_conversation_id(connection)
         self.worker: TaskThread | None = None
         self._workers: set[TaskThread] = set()
         self._close_when_idle = False
@@ -124,6 +150,7 @@ class NoiteWindow(QMainWindow):
         self.setMinimumSize(920, 620)
         self.resize(1160, 720)
         self._build_ui()
+        self._refresh_conversation_list(self.conversation_id)
         self._load_history()
         self._check_status()
 
@@ -145,10 +172,13 @@ class NoiteWindow(QMainWindow):
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         mark.setFixedSize(38, 38)
         rail_layout.addWidget(mark)
-        rail_layout.addWidget(self._rail_glyph("⌂", "Noite 2.0"))
-        rail_layout.addWidget(self._rail_glyph("◷", "Conversa local"))
+        home_button = self._rail_button("⌂", "Focar a conversa")
+        home_button.clicked.connect(lambda: self.input.setFocus())
+        rail_layout.addWidget(home_button)
+        history_button = self._rail_button("◷", "Lista de conversas")
+        history_button.clicked.connect(lambda: self.conversation_list.setFocus())
+        rail_layout.addWidget(history_button)
         rail_layout.addStretch(1)
-        rail_layout.addWidget(self._rail_glyph("···", "Ferramentas MCP"))
         shell.addWidget(rail)
 
         sidebar = QFrame()
@@ -161,16 +191,36 @@ class NoiteWindow(QMainWindow):
         side_title.setObjectName("sideTitle")
         side_layout.addWidget(side_title)
         side_layout.addSpacing(16)
-        self._side_section(side_layout, "PROJETO")
-        project = QLabel("▱   Noite 2.0")
+        self._side_section(side_layout, "WORKSPACE")
+        project = QLabel("Nenhum projeto aberto")
         project.setObjectName("projectTile")
         project.setMinimumHeight(40)
         side_layout.addWidget(project)
+        self.project_button = QPushButton("Abrir projeto…")
+        self.project_button.setObjectName("sideButton")
+        self.project_button.clicked.connect(self._open_project)
+        side_layout.addWidget(self.project_button)
         self._side_section(side_layout, "CONVERSAS")
-        conversation = QLabel("◦   Conversa local")
-        conversation.setObjectName("conversationTile")
-        conversation.setMinimumHeight(36)
-        side_layout.addWidget(conversation)
+        self.new_conversation_button = QPushButton("+   Nova conversa")
+        self.new_conversation_button.setObjectName("sideButton")
+        self.new_conversation_button.setMinimumHeight(36)
+        self.new_conversation_button.clicked.connect(self.new_conversation)
+        side_layout.addWidget(self.new_conversation_button)
+        self.conversation_list = QListWidget()
+        self.conversation_list.setObjectName("conversationList")
+        self.conversation_list.setAccessibleName("Conversas salvas")
+        self.conversation_list.currentItemChanged.connect(self._conversation_selected)
+        side_layout.addWidget(self.conversation_list, 1)
+        conversation_actions = QHBoxLayout()
+        self.rename_conversation_button = QPushButton("Renomear")
+        self.rename_conversation_button.setObjectName("sideButton")
+        self.rename_conversation_button.clicked.connect(self.rename_current_conversation)
+        self.delete_conversation_button = QPushButton("Excluir")
+        self.delete_conversation_button.setObjectName("sideButton")
+        self.delete_conversation_button.clicked.connect(self.delete_current_conversation)
+        conversation_actions.addWidget(self.rename_conversation_button)
+        conversation_actions.addWidget(self.delete_conversation_button)
+        side_layout.addLayout(conversation_actions)
         self._side_section(side_layout, "FERRAMENTAS")
         self.mcp_button = QPushButton("◇   Ferramentas MCP")
         self.mcp_button.setObjectName("sideButton")
@@ -281,6 +331,12 @@ class NoiteWindow(QMainWindow):
         layout.addWidget(footer)
         shell.addWidget(main, 1)
         self.setCentralWidget(root)
+        self.project_dock = ProjectDock(self)
+        self.project_dock.workspace_changed.connect(lambda path: project.setText(Path(path).name))
+        if self.project_dock.workspace is not None:
+            project.setText(self.project_dock.workspace.name)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.project_dock)
+        self.project_dock.hide()
         self.setStyleSheet(
             "QWidget { background: #171719; color: #ededf0; font-size: 13px; }"
             "QLabel { background: transparent; }"
@@ -293,12 +349,19 @@ class NoiteWindow(QMainWindow):
             "QLabel#sideTitle { font-size: 19px; font-weight: 650; }"
             "QLabel#sectionLabel { color: #92939a; font-size: 10px; font-weight: 700; "
             "padding-top: 14px; letter-spacing: 1px; }"
-            "QLabel#projectTile { background: #303136; border-radius: 8px; padding: 0 10px; "
-            "font-weight: 600; }"
-            "QLabel#conversationTile { color: #c6c6cb; padding: 0 10px; }"
+            "QLabel#projectTile { color: #92939a; padding: 0 4px; font-weight: 400; }"
             "QPushButton#sideButton { background: transparent; color: #c6c6cb; text-align: left; "
             "border: 0; border-radius: 8px; padding: 0 10px; }"
             "QPushButton#sideButton:hover { background: #2b2b30; color: white; }"
+            "QPushButton#sideButton:disabled { color: #696a70; }"
+            "QListWidget#conversationList { background: transparent; border: 0; "
+            "outline: 0; color: #c6c6cb; }"
+            "QListWidget#conversationList::item { padding: 8px 9px; border-radius: 7px; }"
+            "QListWidget#conversationList::item:selected { background: #303136; color: white; }"
+            "QListWidget#conversationList::item:hover { background: #28292d; }"
+            "QToolButton#railButton { color: #96979d; background: transparent; border: 0; "
+            "border-radius: 8px; font-size: 18px; min-height: 34px; }"
+            "QToolButton#railButton:hover { color: white; background: #2b2c30; }"
             "QLabel#sideNote, QLabel#footerHint, QLabel#muted { color: #92939a; }"
             "QLabel#sideNote { border-top: 1px solid #303035; padding-top: 12px; font-size: 11px; }"
             "QLabel#title { font-size: 18px; font-weight: 650; }"
@@ -326,14 +389,21 @@ class NoiteWindow(QMainWindow):
             "QLabel#footerHint { font-size: 10px; padding-left: 4px; }"
         )
 
+    def _open_project(self) -> None:
+        self.project_dock.show()
+        self.project_dock.raise_()
+        if self.project_dock.workspace is None:
+            self.project_dock.choose_workspace()
+
     @staticmethod
-    def _rail_glyph(text: str, accessible_name: str) -> QLabel:
-        label = QLabel(text)
-        label.setObjectName("railGlyph")
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setToolTip(accessible_name)
-        label.setFixedHeight(32)
-        return label
+    def _rail_button(text: str, accessible_name: str) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("railButton")
+        button.setText(text)
+        button.setToolTip(accessible_name)
+        button.setAccessibleName(accessible_name)
+        button.setFixedHeight(34)
+        return button
 
     @staticmethod
     def _side_section(layout: QVBoxLayout, text: str) -> None:
@@ -359,10 +429,120 @@ class NoiteWindow(QMainWindow):
             )
 
     def _load_history(self) -> None:
-        with closing(open_database(self.service.database_path)) as connection:
-            messages = recent_messages(connection, self.conversation_id, limit=50)
+        messages = self.service.history(self.conversation_id, limit=50)
+        self.chat.clear()
+        if not messages:
+            self.chat.hide()
+            self.welcome.show()
         for role, content in messages:
             self._append_message(role, content)
+
+    def _refresh_conversation_list(self, select_id: str | None = None) -> None:
+        with closing(open_database(self.service.database_path)) as connection:
+            conversations = list_conversations(connection)
+        self.conversation_list.blockSignals(True)
+        self.conversation_list.clear()
+        selected = None
+        for conversation_id, title, _updated_at in conversations:
+            item = QListWidgetItem(title)
+            item.setData(Qt.UserRole, conversation_id)
+            item.setToolTip(title)
+            self.conversation_list.addItem(item)
+            if conversation_id == (select_id or self.conversation_id):
+                selected = item
+        if selected is not None:
+            self.conversation_list.setCurrentItem(selected)
+        self.conversation_list.blockSignals(False)
+        self.rename_conversation_button.setEnabled(selected is not None)
+        self.delete_conversation_button.setEnabled(selected is not None)
+
+    def _conversation_selected(
+        self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
+    ) -> None:
+        if current is None:
+            return
+        conversation_id = str(current.data(Qt.UserRole))
+        if conversation_id != self.conversation_id:
+            self.open_conversation(conversation_id)
+
+    def _set_conversation_controls_enabled(self, enabled: bool) -> None:
+        self.new_conversation_button.setEnabled(enabled)
+        self.conversation_list.setEnabled(enabled)
+        has_selection = self.conversation_list.currentItem() is not None
+        self.rename_conversation_button.setEnabled(enabled and has_selection)
+        self.delete_conversation_button.setEnabled(enabled and has_selection)
+
+    def open_conversation(self, conversation_id: str) -> None:
+        if self.worker is not None and self.worker.isRunning():
+            self._refresh_conversation_list(self.conversation_id)
+            QMessageBox.information(
+                self, "Geração em andamento", "Aguarde ou cancele a geração antes de trocar."
+            )
+            return
+        try:
+            with closing(open_database(self.service.database_path)) as connection:
+                set_active_conversation_id(connection, conversation_id)
+        except ValueError:
+            self._refresh_conversation_list(self.conversation_id)
+            return
+        self.conversation_id = conversation_id
+        self._refresh_conversation_list(conversation_id)
+        self._load_history()
+
+    def new_conversation(self) -> None:
+        if self.worker is not None and self.worker.isRunning():
+            QMessageBox.information(
+                self, "Geração em andamento", "Aguarde ou cancele a geração antes de continuar."
+            )
+            return
+        with closing(open_database(self.service.database_path)) as connection:
+            conversation_id = create_conversation(connection)
+            set_active_conversation_id(connection, conversation_id)
+        self.conversation_id = conversation_id
+        self._refresh_conversation_list(conversation_id)
+        self._load_history()
+        self.input.setFocus()
+
+    def rename_current_conversation(self) -> None:
+        item = self.conversation_list.currentItem()
+        if item is None:
+            return
+        title, accepted = QInputDialog.getText(
+            self, "Renomear conversa", "Título:", QLineEdit.EchoMode.Normal, item.text()
+        )
+        if not accepted:
+            return
+        try:
+            with closing(open_database(self.service.database_path)) as connection:
+                renamed = rename_conversation(connection, str(item.data(Qt.UserRole)), title)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Título inválido", str(exc))
+            return
+        if renamed:
+            self._refresh_conversation_list(self.conversation_id)
+
+    def delete_current_conversation(self) -> None:
+        item = self.conversation_list.currentItem()
+        if item is None:
+            return
+        conversation_id = str(item.data(Qt.UserRole))
+        if (
+            QMessageBox.question(
+                self,
+                "Excluir conversa",
+                f"Excluir “{item.text()}” e todas as mensagens dessa conversa?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            != QMessageBox.Yes
+        ):
+            return
+        with closing(open_database(self.service.database_path)) as connection:
+            active_id = delete_conversation(connection, conversation_id)
+        if active_id is not None:
+            self.conversation_id = active_id
+            self._refresh_conversation_list(active_id)
+            self._load_history()
 
     def _check_status(self) -> None:
         self._start_worker(
@@ -412,16 +592,21 @@ class NoiteWindow(QMainWindow):
             return
         self.input.clear()
         self._append_message("user", text)
+        conversation_id = self.conversation_id
         self.send_button.setEnabled(False)
+        self._set_conversation_controls_enabled(False)
         self.progress.setText("A Noite está pensando…")
         model = self.model_box.currentText().strip() or self.settings.local_model
-        self.service = AssistantService(self.settings, model=model)
+        service = AssistantService(self.settings, model=model)
+        self.service = service
         self._streaming_response_active = False
         self._streaming_response_text = ""
         self.cancel_button.setEnabled(True)
         self.cancel_button.show()
         self.worker = self._start_worker(
-            lambda worker: self.service.respond(text, on_chunk=worker.streamed.emit),
+            lambda worker: service.respond(
+                text, conversation_id=conversation_id, on_chunk=worker.streamed.emit
+            ),
             completed=self._on_response,
             failed=self._on_error,
             cancelled=self._on_cancelled,
@@ -431,6 +616,8 @@ class NoiteWindow(QMainWindow):
 
     def _generation_finished(self) -> None:
         self.send_button.setEnabled(True)
+        self._refresh_conversation_list(self.conversation_id)
+        self._set_conversation_controls_enabled(True)
         self.cancel_button.hide()
 
     def cancel_generation(self) -> None:
@@ -502,6 +689,8 @@ class MCPDialog(QDialog):
         super().__init__(parent)
         self.data_dir = Path(data_dir)
         self.config_path = self.data_dir / "mcp_servers.json"
+        self._approved: dict[str, str] = {}
+        self._load_notice = ""
         self.servers: dict[str, dict[str, object]] = self._load_servers()
         self.worker: TaskThread | None = None
         self._close_when_idle = False
@@ -551,17 +740,31 @@ class MCPDialog(QDialog):
         try:
             data = json.loads(self.config_path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
-                return {}
-            return {
-                name: value
-                for name, value in data.items()
-                if isinstance(name, str)
-                and isinstance(value, dict)
-                and isinstance(value.get("command"), str)
-                and isinstance(value.get("args", []), list)
-                and all(isinstance(arg, str) for arg in value.get("args", []))
-            }
-        except (OSError, json.JSONDecodeError):
+                raise ValueError("a raiz da configuração precisa ser um objeto JSON")
+            for name, value in data.items():
+                if (
+                    not isinstance(name, str)
+                    or not isinstance(value, dict)
+                    or not isinstance(value.get("command"), str)
+                    or not isinstance(value.get("args", []), list)
+                    or not all(isinstance(arg, str) for arg in value.get("args", []))
+                ):
+                    raise ValueError("há uma configuração de servidor MCP inválida")
+            return {name: value for name, value in data.items()}
+        except FileNotFoundError:
+            return {}
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            backup = self.config_path.with_suffix(".json.corrupt")
+            index = 1
+            while backup.exists():
+                backup = self.config_path.with_name(f"{self.config_path.name}.corrupt.{index}")
+                index += 1
+            try:
+                self.config_path.replace(backup)
+                backup_notice = f"Cópia preservada como {backup.name}."
+            except OSError:
+                backup_notice = "O arquivo inválido foi preservado no local original."
+            self._load_notice = f"Configuração MCP inválida ({type(exc).__name__}). {backup_notice}"
             return {}
 
     def _save_servers(self) -> None:
@@ -581,6 +784,8 @@ class MCPDialog(QDialog):
             self.server_box.setCurrentText(current)
         self.server_box.blockSignals(False)
         self._show_server_config(self.server_box.currentText())
+        if self._load_notice:
+            self.result.setPlainText(self._load_notice)
 
     def _show_server_config(self, name: str) -> None:
         config = self.servers.get(name, {})
@@ -596,8 +801,11 @@ class MCPDialog(QDialog):
             args = json.loads(self.args_input.text())
         except json.JSONDecodeError as exc:
             raise ValueError("Os argumentos precisam ser uma lista JSON de textos.") from exc
-        if not name or not command or not isinstance(args, list) or not all(
-            isinstance(arg, str) for arg in args
+        if (
+            not name
+            or not command
+            or not isinstance(args, list)
+            or not all(isinstance(arg, str) for arg in args)
         ):
             raise ValueError("Informe nome, executável e uma lista JSON de argumentos.")
         return name, command, args
@@ -612,14 +820,16 @@ class MCPDialog(QDialog):
             self,
             "Iniciar servidor MCP",
             "Iniciar este processo local para descobrir ferramentas?\n\n"
-            f"{name}\n{command} {shlex.join(args)}",
+            f"{name}\n{subprocess.list2cmdline([command, *args])}",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
         if approved != QMessageBox.Yes:
             return
-        self.servers[name] = {"command": command, "args": args}
+        configuration = {"command": command, "args": args}
+        self.servers[name] = configuration
         self._save_servers()
+        self._approved[name] = self._server_fingerprint(configuration)
         self._refresh_servers()
         self.server_box.setCurrentText(name)
         self._set_busy(True)
@@ -644,6 +854,39 @@ class MCPDialog(QDialog):
             "Selecione uma ferramenta, informe os argumentos e aprove a chamada."
         )
 
+    @staticmethod
+    def _server_fingerprint(config: dict[str, object]) -> str:
+        canonical = json.dumps(
+            {"command": config.get("command"), "args": config.get("args", [])},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def _server_is_approved(self, name: str, config: dict[str, object]) -> bool:
+        persisted = self._load_servers().get(name)
+        approved_fingerprint = self._approved.get(name)
+        return (
+            persisted is not None
+            and self._server_fingerprint(config) == approved_fingerprint
+            and self._server_fingerprint(persisted) == approved_fingerprint
+        )
+
+    def _warn_configuration_changed(self) -> None:
+        QMessageBox.warning(
+            self,
+            "Configuração alterada",
+            "O executável ou os argumentos mudaram desde a aprovação. "
+            "Salve e descubra novamente antes de chamar ferramentas.",
+        )
+
+    def _show_tool_result(self, result: object) -> None:
+        maximum = 20_000
+        text = "\n".join(map(str, result))
+        if len(text) > maximum:
+            text = text[:maximum] + f"\n[… truncado em {maximum} caracteres]"
+        self.result.setPlainText("[Dados não confiáveis recebidos do servidor MCP]\n" + text)
+
     def _call_selected(self) -> None:
         item = self.tools.currentItem()
         name = self.server_box.currentText()
@@ -663,20 +906,32 @@ class MCPDialog(QDialog):
             QMessageBox.warning(self, "JSON inválido", "Os argumentos precisam ser um objeto JSON.")
             return
         tool = item.data(Qt.UserRole)
-        if QMessageBox.question(
-            self,
-            "Aprovar chamada MCP",
-            "O servidor receberá esta chamada e estes argumentos. "
-            "Respostas do servidor são dados não confiáveis.\n\n"
-            f"Servidor: {name}\nFerramenta: {tool['name']}\n"
-            f"Argumentos: {json.dumps(arguments, ensure_ascii=False)}\n\nAutorizar agora?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        ) != QMessageBox.Yes:
+        config = self.servers[name]
+        if not self._server_is_approved(name, config):
+            self._warn_configuration_changed()
+            return
+        command = str(config["command"])
+        args = config.get("args", [])
+        command_line = subprocess.list2cmdline([command, *args])
+        if (
+            QMessageBox.question(
+                self,
+                "Aprovar chamada MCP",
+                "O servidor receberá esta chamada e estes argumentos. "
+                "Respostas do servidor são dados não confiáveis.\n\n"
+                f"Servidor: {name}\nExecutável: {command_line}\nFerramenta: {tool['name']}\n"
+                f"Argumentos: {json.dumps(arguments, ensure_ascii=False)}\n\nAutorizar agora?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            != QMessageBox.Yes
+        ):
+            return
+        if not self._server_is_approved(name, config):
+            self._warn_configuration_changed()
             return
         from .mcp_client import MCPClient, MCPServer
 
-        config = self.servers[name]
         server = MCPServer(
             name,
             str(config["command"]),
@@ -686,11 +941,15 @@ class MCPDialog(QDialog):
         self._set_busy(True)
         self.result.setPlainText("Executando a chamada aprovada…")
         self.worker = TaskThread(
-            lambda: MCPClient().call_tool(server, str(tool["name"]), arguments), self
+            lambda: MCPClient().call_tool(
+                server,
+                str(tool["name"]),
+                arguments,
+                input_schema=tool.get("input_schema"),
+            ),
+            self,
         )
-        self.worker.completed.connect(
-            lambda result: self.result.setPlainText("\n".join(map(str, result)))
-        )
+        self.worker.completed.connect(self._show_tool_result)
         self.worker.failed.connect(lambda message: self.result.setPlainText(message))
         self.worker.finished.connect(self._task_finished)
         self.worker.start()
@@ -720,6 +979,8 @@ class MCPDialog(QDialog):
 
 def run_gui() -> int:
     app = QApplication.instance() or QApplication([])
+    settings = get_settings()
+    setup_logging(settings.data_dir)
     window = NoiteWindow()
     window.show()
     return app.exec()

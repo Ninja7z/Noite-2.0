@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
+MAX_TOOL_RESULT_CHARS = 20_000
+
 
 @dataclass(frozen=True)
 class MCPServer:
@@ -48,26 +50,47 @@ class MCPClient:
         ]
 
     async def call_tool(
-        self, server: MCPServer, name: str, arguments: dict[str, Any]
+        self,
+        server: MCPServer,
+        name: str,
+        arguments: dict[str, Any],
+        input_schema: dict[str, Any] | None = None,
     ) -> list[str]:
         if name not in server.allowed_tools:
             raise PermissionError(f"A ferramenta MCP '{name}' não está autorizada.")
+        try:
+            from jsonschema import validate
+        except ImportError as exc:
+            raise RuntimeError("Instale o extra MCP com: pip install -e '.[mcp]'") from exc
+        if input_schema is not None:
+            validate(instance=arguments, schema=input_schema)
         async with self._session(server) as session:
-            response = await session.list_tools()
-            tool = next((candidate for candidate in response.tools if candidate.name == name), None)
-            if tool is None:
-                raise LookupError(f"A ferramenta MCP '{name}' não foi encontrada.")
-            try:
-                from jsonschema import validate
-
+            if input_schema is None:
+                response = await session.list_tools()
+                tool = next(
+                    (candidate for candidate in response.tools if candidate.name == name), None
+                )
+                if tool is None:
+                    raise LookupError(f"A ferramenta MCP '{name}' não foi encontrada.")
                 validate(instance=arguments, schema=tool.inputSchema)
-            except ImportError as exc:
-                raise RuntimeError("Instale o extra MCP com: pip install -e '.[mcp]'") from exc
             result = await session.call_tool(name, arguments)
         if result.isError:
             raise RuntimeError("O servidor MCP informou falha ao executar a ferramenta.")
-        return [
-            block.text
-            for block in result.content
-            if getattr(block, "type", None) == "text" and isinstance(block.text, str)
-        ]
+        output: list[str] = []
+        remaining = MAX_TOOL_RESULT_CHARS
+        truncated = False
+        for block in result.content:
+            if getattr(block, "type", None) != "text" or not isinstance(block.text, str):
+                continue
+            if len(block.text) > remaining:
+                output.append(block.text[:remaining])
+                truncated = True
+                break
+            output.append(block.text)
+            remaining -= len(block.text)
+            if remaining == 0:
+                truncated = True
+                break
+        if truncated:
+            output.append(f"[… resultado truncado em {MAX_TOOL_RESULT_CHARS} caracteres]")
+        return output

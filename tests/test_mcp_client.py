@@ -73,6 +73,67 @@ def test_call_tool_validates_schema_and_returns_data() -> None:
     ]
 
 
+def test_tool_schema_is_validated_before_opening_server() -> None:
+    client = MCPClient()
+    opened = []
+
+    @asynccontextmanager
+    async def fake_session(_server):
+        opened.append(True)
+        yield FakeSession()
+
+    client._session = fake_session
+    server = MCPServer("example", "configured-server", allowed_tools=frozenset({"lookup"}))
+
+    with pytest.raises(Exception):
+        asyncio.run(
+            client.call_tool(
+                server,
+                "lookup",
+                {"wrong": "value"},
+                input_schema={
+                    "type": "object",
+                    "properties": {"term": {"type": "string"}},
+                    "required": ["term"],
+                    "additionalProperties": False,
+                },
+            )
+        )
+    assert opened == []
+
+
+def test_tool_result_is_capped():
+    from noite.mcp_client import MAX_TOOL_RESULT_CHARS
+
+    client = MCPClient()
+    _fake_session(client)
+    server = MCPServer("example", "trusted-command", allowed_tools=frozenset({"lookup"}))
+
+    class LargeSession(FakeSession):
+        async def call_tool(self, name, arguments):
+            return SimpleNamespace(
+                isError=False,
+                content=[SimpleNamespace(type="text", text="x" * (MAX_TOOL_RESULT_CHARS + 10))],
+            )
+
+    @asynccontextmanager
+    async def large_session(_server):
+        yield LargeSession()
+
+    client._session = large_session
+    output = asyncio.run(
+        client.call_tool(
+            server,
+            "lookup",
+            {"term": "hello"},
+            input_schema={"type": "object", "properties": {"term": {"type": "string"}}},
+        )
+    )
+
+    assert len(output[0]) == MAX_TOOL_RESULT_CHARS
+    assert "truncado" in output[1]
+
+
 def test_stdio_client_discovers_and_calls_real_local_server() -> None:
     from pathlib import Path
 
