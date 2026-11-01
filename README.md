@@ -1,6 +1,6 @@
 # Noite 2.0
 
-Assistente desktop em português, desenvolvido em etapas para o hardware previsto no relatório do projeto.
+Assistente desktop local-first em português. O MVP inclui chat PySide6, respostas rápidas, gateway Ollama e histórico SQLite.
 
 ## Escopo inicial
 
@@ -8,7 +8,7 @@ Assistente desktop em português, desenvolvido em etapas para o hardware previst
 - Roteador determinístico para comandos simples e encaminhamento de conversas ao modelo local.
 - LiteLLM como gateway; Ollama com `qwen2.5:3b` como modelo local inicial.
 - SQLite com FTS5 para histórico textual. A extensão vetorial fica para uma etapa posterior.
-- Interface PySide6 e automação do Windows são dependências opcionais do MVP.
+- Interface PySide6 funcional está disponível como extra opcional. Automação do Windows continua fora do MVP.
 - Chamadas em nuvem ficam desativadas por padrão e exigem configuração explícita de credenciais.
 
 O pipeline de voz, `sqlite-vec`, integração Roblox/Blender e demais componentes avançados pertencem às fases posteriores do relatório; não são necessários para iniciar o núcleo textual.
@@ -40,6 +40,8 @@ Deixe esse terminal aberto enquanto usa o projeto. Em outro terminal:
 ```powershell
 python -m noite
 ```
+
+Para usar a interface de terminal, execute python -m noite --cli. Para instalar o cliente MCP experimental, use python -m pip install -e ".[mcp]" e consulte docs/MCP_STATUS.md. O cliente MCP não é chamado automaticamente pelo modelo.
 
 ## Papéis do projeto
 

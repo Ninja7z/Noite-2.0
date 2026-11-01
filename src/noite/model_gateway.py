@@ -1,16 +1,24 @@
+from collections.abc import Sequence
+
 from litellm import acompletion
 from litellm.exceptions import APIConnectionError, OpenAIError, Timeout
 
 from .config import get_settings
 
 
-async def ask_local_model(prompt: str) -> str:
+async def ask_local_model(
+    prompt: str, *, messages: Sequence[dict[str, str]] | None = None, model: str | None = None
+) -> str:
     settings = get_settings()
     try:
         response = await acompletion(
-            model=f"ollama/{settings.local_model}",
+            model=f"ollama/{model or settings.local_model}",
             api_base=settings.ollama_base_url,
-            messages=[{"role": "user", "content": prompt}],
+            messages=(
+                list(messages)
+                if messages is not None
+                else [{"role": "user", "content": prompt}]
+            ),
             timeout=30,
             num_retries=0,
         )

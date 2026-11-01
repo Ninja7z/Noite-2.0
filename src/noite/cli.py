@@ -1,27 +1,25 @@
 import asyncio
+import sys
 
 from .config import get_settings
-from .contracts import IntentKind
-from .model_gateway import ask_local_model
-from .router import route
 
 
 async def _handle(text: str) -> str:
-    intent = route(text)
-    if intent.kind == IntentKind.CHAT:
-        return await ask_local_model(intent.normalized_text)
-    if intent.kind == IntentKind.OPEN_APPLICATION:
-        return (
-            f"Ação identificada: abrir {intent.parameters['app']}. "
-            "Execução ficará na camada segura de ferramentas."
-        )
-    return (
-        f"Busca identificada: {intent.parameters['query']}. "
-        "Execução ficará na camada segura de ferramentas."
-    )
+    from .assistant import AssistantService
+
+    return await AssistantService().respond(text)
 
 
 def main() -> None:
+    if "--cli" not in sys.argv[1:]:
+        try:
+            from .ui import run_gui
+        except ImportError as exc:
+            raise SystemExit(
+                "A interface requer PySide6. Instale com: pip install -e '.[desktop]'"
+            ) from exc
+        raise SystemExit(run_gui())
+
     settings = get_settings()
     print(f"Noite 2.0 | modelo local: {settings.local_model} | digite /sair para encerrar")
     while True:

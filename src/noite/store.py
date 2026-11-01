@@ -18,6 +18,11 @@ def open_database(path: Path) -> sqlite3.Connection:
         )
         """
     )
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(messages)")}
+    if "conversation_id" not in columns:
+        connection.execute(
+            "ALTER TABLE messages ADD COLUMN conversation_id TEXT NOT NULL DEFAULT 'default'"
+        )
     connection.execute(
         """
         CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
@@ -41,3 +46,43 @@ def open_database(path: Path) -> sqlite3.Connection:
         """
     )
     return connection
+
+
+def add_message(
+    connection: sqlite3.Connection,
+    role: str,
+    content: str,
+    conversation_id: str = "default",
+    trace_id: str = "local",
+) -> int:
+    cursor = connection.execute(
+        "INSERT INTO messages(trace_id, role, content, conversation_id) VALUES (?, ?, ?, ?)",
+        (trace_id, role, content, conversation_id),
+    )
+    connection.commit()
+    return int(cursor.lastrowid)
+
+
+def recent_messages(
+    connection: sqlite3.Connection, conversation_id: str = "default", limit: int = 50
+) -> list[tuple[str, str]]:
+    rows = connection.execute(
+        "SELECT role, content FROM messages WHERE conversation_id = ? "
+        "ORDER BY id DESC LIMIT ?",
+        (conversation_id, limit),
+    ).fetchall()
+    return [(str(role), str(content)) for role, content in reversed(rows)]
+
+
+def search_messages(connection: sqlite3.Connection, query: str, limit: int = 10) -> list[str]:
+    terms = [term for term in query.split() if term]
+    if not terms:
+        return []
+    match_query = " AND ".join('"' + term.replace('"', '""') + '"' for term in terms)
+    rows = connection.execute(
+        "SELECT messages.content FROM messages_fts "
+        "JOIN messages ON messages.id = messages_fts.rowid "
+        "WHERE messages_fts MATCH ? ORDER BY messages.id DESC LIMIT ?",
+        (match_query, limit),
+    ).fetchall()
+    return [str(row[0]) for row in rows]

@@ -20,6 +20,7 @@ dependencies = [
 desktop = ["PySide6-Essentials>=6.10,<7"]
 windows = ["pywinauto>=0.6.9"]
 dev = ["pytest>=8,<10", "ruff>=0.14,<1"]
+mcp = ["mcp>=1,<2", "jsonschema>=4,<5"]
 
 [project.scripts]
 noite = "noite.cli:main"
