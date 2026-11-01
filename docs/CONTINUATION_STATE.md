@@ -8,10 +8,10 @@ Fase 2 — estrutura inicial da IDE, em andamento.
 
 - Checkout: `<checkout-root>`.
 - Branch: `codex/stabilize-core`.
-- HEAD local: `ac204fafac8868687b8241978a385f1e37d1eb23`.
+- Commit de implementação local: `04c3af7`; remoto ainda está em `ac204fa` até o push.
 - `origin`: `https://github.com/Ninja7z/Noite-2.0.git`.
 - PR #1: https://github.com/Ninja7z/Noite-2.0/pull/1 — aberto, draft, sem merge; head remoto confirmado em `ac204fa` após o push.
-- Alterações desta tarefa estão apenas no checkout local; sem commit, push, merge ou atualização remota.
+- A implementação foi commitada localmente; o push foi autorizado e ainda está pendente. Sem merge.
 - `.env` não está presente nem rastreado no checkout. O histórico contém `.env` em `9af7993`; inspecionei só os nomes dos campos e confirmei que `ANTHROPIC_API_KEY` estava vazio e os demais eram configurações locais. Nenhum segredo foi detectado; `.env.example` é o exemplo público.
 
 ## Concluído nesta continuação
@@ -20,7 +20,7 @@ Fase 2 — estrutura inicial da IDE, em andamento.
 - Fase 1 implementou entidade persistente de conversas, CRUD, isolamento, restauração, título automático protegido contra renomeação e identidade determinística Noite/modelo.
 - DB real migrado preservando as 22 mensagens e a integridade; backup: `%USERPROFILE%\.noite\noite.sqlite3.pre-conversations-20261101-010721.bak`.
 - Fase 2 avançou com dock de projeto: abrir/reabrir workspace, árvore filtrada, abas, editor PySide6, números de linha, realce básico de Python, dirty marker, salvamento explícito, busca global assíncrona, busca local Ctrl+F e criação confirmada de arquivo/pasta.
-- O commit `ac204fa` foi enviado para `origin/codex/stabilize-core`; o trabalho iniciado depois do push está local e ainda não commitado.
+- O commit `ac204fa` foi enviado para `origin/codex/stabilize-core`; a implementação desta continuação está em `04c3af7`.
 - Incorporei achados da revisão local do PR: chamada de status e busca fora do event loop; gravação atômica de turnos para não deixar mensagem sem resposta; validação de URL/off-grid; router com imperativos e busca explícita de arquivos; logging local sem texto de conversa; configuração MCP corrompida preservada, aprovação vinculada ao fingerprint do executável/args, resultado limitado e schema validado antes de abrir o servidor; importação LiteLLM adiada até a primeira geração; launcher registra stdout/stderr em ~/.noite/launcher.log.
 - Leitura/salvamento bloqueiam padrões comuns de segredos, arquivos >1 MB, binários, UTF-8 inválido e caminhos resolvidos fora do workspace. O hash evita sobrescrever uma alteração externa. UTF-8 BOM e terminadores CRLF/CR são preservados.
 - Comparação técnica e decisão do editor registradas em `MASTER_PLAN.md`.
@@ -38,7 +38,7 @@ Fase 2 — estrutura inicial da IDE, em andamento.
 - A conversa recebe trechos relevantes e buffer ativo do projeto apenas com `off_grid=true`; contexto limitado a 5.000 caracteres; arquivos sensíveis são ignorados e padrões comuns de segredo são mascarados.
 - Contexto de arquivo é rotulado como dado não confiável; não concede autoridade para execução ou gravação.
 - `uv.lock` fixa dependências; CI usa lockfile em Python 3.11/3.13, Windows/Ubuntu.
-- Alterações desta continuação continuam locais, sem commit ou push.
+- A implementação está commitada localmente em `04c3af7`; push pendente, sem merge.
 
 ## Pendências conhecidas
 
@@ -57,7 +57,7 @@ Fase 2 — estrutura inicial da IDE, em andamento.
 - `uv.lock` fixa as dependências resolvidas; `uv lock --check` passou.
 - CI atualizado para Python 3.11 e 3.13, Windows e Ubuntu, com instalação e comandos bloqueados pelo lockfile.
 - Validação local: `ruff check .` passou; `pytest -q` — 99 passaram; CLI iniciou e encerrou com `/sair`; `git diff --check` passou; `uv lock --check` passou.
-- Segurança Git: nenhum arquivo `.env` rastreado; sem execução de CI remota nesta sessão.
+- Segurança Git: nenhum arquivo `.env` rastreado; CI remota pendente de executar após push.
 
 ## Comandos
 

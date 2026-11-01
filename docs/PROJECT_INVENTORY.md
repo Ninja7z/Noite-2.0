@@ -3,10 +3,10 @@
 ## Checkout e Git
 
 - Checkout: `<checkout-root>`.
-- Branch: `codex/stabilize-core`, HEAD local `ac204fafac8868687b8241978a385f1e37d1eb23`; mudanças posteriores estão locais e sem commit.
+- Branch: `codex/stabilize-core`; implementação local `04c3af7`, aguardando push.
 - `origin`: `https://github.com/Ninja7z/Noite-2.0.git`.
-- PR #1 está aberto como draft e sem merge; último head remoto confirmado `ac204fa`. Mudanças seguintes ainda não foram publicadas.
-- As alterações do trabalho atual são locais e não commitadas. Nenhuma operação remota foi feita.
+- PR #1 está aberto como draft e sem merge; último head remoto confirmado `ac204fa`. `04c3af7` foi commitado localmente e aguarda push.
+- Sem merge.
 
 ## Arquitetura atual
 
@@ -32,7 +32,7 @@
 - Baseline antes da implementação: 35 testes e Ruff passaram.
 - Após a Fase 1: 42 testes, Ruff, diff check e CLI `/sair` passaram.
 - Fase 2 inicial: `pytest -q` — 55 passaram; Ruff, formatação dos arquivos tocados, `git diff --check` e smoke do CLI passaram. Busca validada visualmente no Windows; veja `ENGINEERING_LOG.md`.
-- Continuação atual: `pytest -q` — 99 passaram; Ruff, `git diff --check`, `uv lock --check` e CLI passaram. CI remota não executada.
+- Continuação atual: `pytest -q` — 99 passaram; Ruff, `git diff --check`, `uv lock --check` e CLI passaram. CI remota pendente de push.
 
 ## Referências
 

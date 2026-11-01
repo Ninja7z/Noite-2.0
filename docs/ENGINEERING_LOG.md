@@ -71,4 +71,4 @@
 - **Arquivos:** `.github/workflows/ci.yml`, `uv.lock`, docs de engenharia, `src/noite/{assistant,ide,mcp_client,store,ui,workspace}.py` e testes correspondentes.
 - **Validação local:** `ruff check .` passou; `pytest -q` — 99 passaram; CLI iniciou/encerrou com `/sair`; `git diff --check` e `uv lock --check` passaram. CI remota ainda não executada.
 - **Bloqueios:** rename/delete e terminal seguem aguardando revisão do desenho de segurança no Slack; execução de Roblox e distribuição standalone não foram validadas.
-- **Git:** alterações locais ainda não commitadas nesta etapa; sem merge.
+- **Git:** implementação commitada como `04c3af7`, aguardando push autorizado; sem merge.
