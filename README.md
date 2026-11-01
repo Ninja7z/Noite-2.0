@@ -16,7 +16,7 @@ O pipeline de voz, `sqlite-vec`, integração Roblox/Blender e demais componente
 
 ## IDE (em desenvolvimento)
 
-Na janela, use **Abrir projeto…** para selecionar a pasta de trabalho. O dock **Projeto** mantém a árvore e abas ao lado da conversa. Nesta primeira etapa, arquivos UTF-8 até 1 MB podem ser abertos, editados e salvos manualmente; `.env`, credenciais, binários, arquivos fora do workspace e mudanças externas posteriores à abertura são bloqueados. O destaque de sintaxe inicial cobre Python. **Buscar no projeto** executa busca textual limitada em segundo plano e permite abrir o resultado na linha encontrada. O terminal, diagnósticos e operações de criação/exclusão ainda não estão implementados; acompanhe [docs/MASTER_PLAN.md](docs/MASTER_PLAN.md).
+Na janela, use **Abrir projeto…** para selecionar a pasta de trabalho. O dock **Projeto** mantém a árvore e abas ao lado da conversa. Arquivos UTF-8 até 1 MB podem ser abertos, editados e salvos manualmente; `.env`, credenciais, binários, arquivos fora do workspace e mudanças externas posteriores à abertura são bloqueados. O editor oferece realce Python, busca/substituição no buffer, criação confirmada de arquivo/pasta e checagem AST de sintaxe. **Buscar no projeto** executa busca textual limitada em segundo plano. Com `off_grid=true`, a Noite também envia ao modelo trechos relevantes e a aba ativa, limitados a 5.000 caracteres; segredos comuns são mascarados. Renomear/excluir e terminal aguardam revisão do desenho de segurança; diagnósticos Ruff/pytest integrados ainda não existem. Veja [docs/MASTER_PLAN.md](docs/MASTER_PLAN.md).
 
 ## Ambiente Windows
 
@@ -31,6 +31,8 @@ Copy-Item .env.example .env
 ```
 
 O Ollama deve estar rodando localmente com o modelo configurado em `.env`. Não coloque chaves de API no Git; use o arquivo `.env`, que é ignorado.
+
+Para instalar as dependências exatas do lockfile, use `uv sync --locked --extra desktop --extra mcp --extra dev`. A CI valida Python 3.11 e 3.13 em Windows e Ubuntu.
 
 Para iniciar o servidor CUDA no Windows quando a descoberta automática travar, use um terminal dedicado:
 

@@ -1,16 +1,36 @@
 import sqlite3
+import threading
 from pathlib import Path
 from uuid import uuid4
 
 NEW_CONVERSATION_TITLE = "Nova conversa"
 MAX_CONVERSATION_TITLE = 120
+_SCHEMA_LOCK = threading.RLock()
+_INITIALIZED_DATABASES: set[str] = set()
 
 
 def open_database(path: Path) -> sqlite3.Connection:
     """Abre o banco local e prepara histórico pesquisável com FTS5."""
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
+    key = str(path.resolve())
+    existed_before_connect = path.is_file()
+    connection = sqlite3.connect(path, timeout=5.0)
+    connection.execute("PRAGMA busy_timeout = 5000")
     connection.execute("PRAGMA foreign_keys = ON")
+    if existed_before_connect and key in _INITIALIZED_DATABASES:
+        return connection
+    with _SCHEMA_LOCK:
+        if existed_before_connect and key in _INITIALIZED_DATABASES:
+            return connection
+        _ensure_schema(connection)
+        connection.commit()
+        _INITIALIZED_DATABASES.add(key)
+    return connection
+
+
+def _ensure_schema(connection: sqlite3.Connection) -> None:
+    connection.execute("PRAGMA journal_mode = WAL")
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS messages (
@@ -116,8 +136,6 @@ def open_database(path: Path) -> sqlite3.Connection:
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (active_id,),
         )
-    connection.commit()
-    return connection
 
 
 def create_conversation(

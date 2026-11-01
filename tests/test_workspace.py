@@ -6,6 +6,7 @@ from noite.workspace import (
     create_workspace_directory,
     create_workspace_file,
     read_workspace_text,
+    retrieve_workspace_context,
     save_workspace_text,
     search_workspace_text,
 )
@@ -102,6 +103,32 @@ def test_search_workspace_is_case_insensitive_and_skips_secrets_and_dependencies
 def test_search_workspace_validates_query(tmp_path):
     with pytest.raises(ValueError, match="1 a 200"):
         search_workspace_text(tmp_path, " ")
+
+
+def test_project_context_selects_relevant_files_and_excludes_secrets(tmp_path):
+    source = tmp_path / "src" / "router.py"
+    source.parent.mkdir()
+    source.write_text(
+        "def classify_intent(text):\n    return route(text)\npassword = 'sensitive-value-123456'\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "notes.txt").write_text("unrelated notes", encoding="utf-8")
+    (tmp_path / ".env").write_text("router_intent=private-token", encoding="utf-8")
+
+    context = retrieve_workspace_context(
+        tmp_path,
+        "explain router intent classification password",
+        active_file=".env",
+        active_text="private-token",
+    )
+
+    assert "src/router.py" in context
+    assert "classify_intent" in context
+    assert "private-token" not in context
+    assert "sensitive-value-123456" not in context
+    assert "[REDACTED]" in context
+    assert "unrelated notes" not in context
+    assert len(context) <= 5_000
 
 
 def test_create_file_and_directory_without_overwriting(tmp_path):

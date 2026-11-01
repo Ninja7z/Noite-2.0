@@ -381,6 +381,7 @@ def test_project_dock_opens_edits_and_saves_workspace_file(app, tmp_path, monkey
     editor = dock.tabs.currentWidget()
     assert isinstance(editor, QPlainTextEdit)
     assert "print('hello')" in editor.toPlainText()
+    assert dock.active_document_snapshot() == ("hello.py", "print('hello')\n")
     assert dock.save_button.isEnabled() is False
     editor.moveCursor(QTextCursor.MoveOperation.End)
     editor.insertPlainText("# saved\n")
@@ -393,13 +394,14 @@ def test_project_dock_opens_edits_and_saves_workspace_file(app, tmp_path, monkey
 
     dock.open_search_match(SearchMatch(source.resolve(), 2, "saved"))
     assert dock.tabs.currentWidget().textCursor().blockNumber() == 1
-    monkeypatch.setattr(
-        QInputDialog,
-        "getText",
-        lambda *args, **kwargs: ("saved", True),
-    )
-    dock.find_in_current_file()
+    dock.find_input.setText("saved")
+    assert dock.find_next()
     assert dock.tabs.currentWidget().textCursor().selectedText() == "saved"
+    dock.replace_input.setText("updated")
+    assert dock.replace_current()
+    assert dock.find_status.text() == "Substituído"
+    assert "# updated" in editor.toPlainText()
+    assert source.read_text(encoding="utf-8") == "print('hello')\n# saved\n"
     dock.close()
     QSettings("cristnzx", "Noite2").setValue("workspace/last_path", "")
 
@@ -427,4 +429,54 @@ def test_project_dock_creates_items_only_after_confirmation(app, tmp_path, monke
     assert (tmp_path / "new-folder").is_dir()
     dock.close()
     QSettings("cristnzx", "Noite2").setValue("workspace/last_path", "")
+    QSettings("cristnzx", "Noite2").setValue("workspace/last_path", "")
+
+
+def test_project_dock_replace_all_stays_in_buffer_and_undoes_as_one_edit(app, tmp_path):
+    from PySide6.QtCore import QSettings
+
+    from noite.ide import ProjectDock
+
+    QSettings("cristnzx", "Noite2").setValue("workspace/last_path", "")
+    source = tmp_path / "sample.py"
+    source.write_text("value = 'old'\nprint('old')\n", encoding="utf-8")
+    dock = ProjectDock()
+    dock.set_workspace(tmp_path)
+    dock.open_index(dock._file_filter.mapFromSource(dock._model.index(str(source))))
+    editor = dock.tabs.currentWidget()
+    dock.find_input.setText("old")
+    dock.replace_input.setText("new")
+
+    assert dock.replace_all() == 2
+    assert editor.toPlainText() == "value = 'new'\nprint('new')\n"
+    assert source.read_text(encoding="utf-8") == "value = 'old'\nprint('old')\n"
+    assert editor.document().isModified()
+    editor.undo()
+    assert editor.toPlainText() == "value = 'old'\nprint('old')\n"
+    dock.close()
+    QSettings("cristnzx", "Noite2").setValue("workspace/last_path", "")
+
+
+def test_project_dock_reports_python_syntax_and_navigates_to_error(app, tmp_path):
+    from PySide6.QtCore import QSettings
+
+    from noite.ide import ProjectDock
+
+    QSettings("cristnzx", "Noite2").setValue("workspace/last_path", "")
+    source = tmp_path / "broken.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    dock = ProjectDock()
+    dock.set_workspace(tmp_path)
+    dock.open_index(dock._file_filter.mapFromSource(dock._model.index(str(source))))
+    editor = dock.tabs.currentWidget()
+
+    dock.check_python_syntax()
+    assert dock.problems.item(0).text() == "broken.py: sintaxe válida"
+    editor.setPlainText("value = (\n")
+    dock.check_python_syntax()
+    problem = dock.problems.item(0)
+    assert "broken.py:1:" in problem.text()
+    dock._navigate_to_problem(problem)
+    assert editor.textCursor().blockNumber() == 0
+    dock.close()
     QSettings("cristnzx", "Noite2").setValue("workspace/last_path", "")

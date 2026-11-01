@@ -60,6 +60,14 @@ def test_database_creation_persistence_and_fts_triggers(tmp_path) -> None:
     connection.close()
 
 
+def test_database_uses_wal_and_busy_timeout(tmp_path):
+    connection = open_database(tmp_path / "noite.sqlite3")
+
+    assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    connection.close()
+
+
 def test_open_database_rebuilds_fts_for_legacy_rows(tmp_path) -> None:
     path = tmp_path / "legacy.sqlite3"
     connection = sqlite3.connect(path)

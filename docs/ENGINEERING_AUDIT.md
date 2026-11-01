@@ -2,7 +2,7 @@
 
 ## Escopo e evidências
 
-Auditoria do checkout `C:\Users\crist\Noite-2.0\Noite-2.0-canonical`, branch `codex/stabilize-core`, commit inicial `fc62d00e95699bfc85b3a10872b107f65a04199a`. O checkout estava limpo e `origin` apontava para `Ninja7z/Noite-2.0`. O PR #1 estava aberto como draft, sem merge, com esse head.
+Auditoria do checkout `<checkout-root>`, branch `codex/stabilize-core`, commit inicial `fc62d00e95699bfc85b3a10872b107f65a04199a`. O checkout estava limpo e `origin` apontava para `Ninja7z/Noite-2.0`. O PR #1 estava aberto como draft, sem merge, com esse head.
 
 - Python global: 3.14.7; ambiente `.venv`: 3.13.16.
 - Dependências atuais incluem PySide6 6.12.0, LiteLLM 1.106.6, Pydantic 2.14.2, pytest 9.2.0 e Ruff 0.17.3.

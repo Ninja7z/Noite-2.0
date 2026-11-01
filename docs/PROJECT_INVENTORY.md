@@ -2,10 +2,10 @@
 
 ## Checkout e Git
 
-- Checkout: `C:\Users\crist\Noite-2.0\Noite-2.0-canonical`.
-- Branch: `codex/stabilize-core`, HEAD local `fc62d00e95699bfc85b3a10872b107f65a04199a`.
+- Checkout: `<checkout-root>`.
+- Branch: `codex/stabilize-core`, HEAD local `ac204fafac8868687b8241978a385f1e37d1eb23`; mudanças posteriores estão locais e sem commit.
 - `origin`: `https://github.com/Ninja7z/Noite-2.0.git`.
-- PR #1 está aberto como draft e sem merge; GitHub confirmou head remoto `fc62d00` na consulta de 2026-11-01.
+- PR #1 está aberto como draft e sem merge; último head remoto confirmado `ac204fa`. Mudanças seguintes ainda não foram publicadas.
 - As alterações do trabalho atual são locais e não commitadas. Nenhuma operação remota foi feita.
 
 ## Arquitetura atual
@@ -14,9 +14,10 @@
 - Ollama local configurado em `http://127.0.0.1:11435`, modelo `qwen2.5:3b` (ver configuração efetiva no registro de engenharia).
 - Conversas persistentes em SQLite com IDs e FTS5; dados em `%USERPROFILE%\.noite`.
 - MCP stdio manual com confirmação humana por descoberta/chamada; o modelo não chama ferramentas automaticamente.
-- IDE em início: `ProjectDock` abre workspace, navega a árvore e edita arquivos UTF-8 pequenos em abas PySide6. Salvamento explícito, proteção de hash contra mudanças externas, bloqueio de segredos/binaries/caminhos externos, limite 1 MB e preservação de BOM/EOL.
+- IDE em início: `ProjectDock` abre workspace, navega a árvore e edita arquivos UTF-8 pequenos em abas PySide6. Salvamento explícito, busca/substituição no buffer, criação confirmada, AST Python, proteção de hash, bloqueio de arquivos sensíveis e caminhos externos, limite 1 MB e preservação de BOM/EOL.
 - Busca global inicial opera em background, filtra segredos/dependências e navega para arquivo/linha.
-- Ainda sem terminal, busca dentro do arquivo, diagnósticos, painel de testes, diff/Git UI ou contexto seletivo do workspace conectado ao modelo.
+- Contexto seletivo lê buffer e trechos relevantes no modo off-grid; limita tamanho e mascara segredos comuns.
+- Ainda sem terminal, rename/delete, diagnósticos Ruff/pytest, painel de testes, diff/Git UI ou indexação simbólica.
 - Não há execução arbitrária de comando pelo modelo.
 
 ## Dados do usuário
@@ -31,6 +32,7 @@
 - Baseline antes da implementação: 35 testes e Ruff passaram.
 - Após a Fase 1: 42 testes, Ruff, diff check e CLI `/sair` passaram.
 - Fase 2 inicial: `pytest -q` — 55 passaram; Ruff, formatação dos arquivos tocados, `git diff --check` e smoke do CLI passaram. Busca validada visualmente no Windows; veja `ENGINEERING_LOG.md`.
+- Continuação atual: `pytest -q` — 99 passaram; Ruff, `git diff --check`, `uv lock --check` e CLI passaram. CI remota não executada.
 
 ## Referências
 

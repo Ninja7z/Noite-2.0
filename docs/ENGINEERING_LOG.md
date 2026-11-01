@@ -50,3 +50,25 @@
 - **Validação:** `pytest -q` — 85 passaram; `ruff check .` passou; `git diff --check` passou; import da UI não carrega LiteLLM; CLI encerrou com código 0.
 - **Limitações conhecidas:** referências de variáveis secretas/keyring para ambientes MCP ainda não implementadas; processo MCP ainda reinicia a cada chamada; áreas da UI ainda acessam SQLite para CRUD local de conversas; o log registra classe da falha sem traceback deliberadamente, para manter a sanitização.
 - **Operações remotas:** nenhuma.
+
+
+## 2026-11-01 — Parcial em falhas, SQLite e revisão de operações
+
+- **Persistência:** WAL e busy_timeout de 5 s; schema inicializado uma vez por caminho de banco/processo; API `AssistantService` agora concentra histórico e CRUD de conversas e a UI deixou de abrir SQLite diretamente.
+- **Resiliência:** resposta parcial agora é persistida com marcador também em falha/timeout do provedor, além de cancelamento.
+- **Privacidade:** removi dos documentos versionados os caminhos absolutos da máquina e substituí por `<checkout-root>` ou `%USERPROFILE%`.
+- **Segurança IDE:** desenho de limites e ameaças registrado em `WORKSPACE_OPERATIONS_SECURITY.md` e enviado ao Slack para revisão. Conforme a revisão da equipe, rename/delete e terminal não serão implementados até receber comentários sobre o desenho.
+- **Validação focal:** 32 testes de store/assistant/UI passaram; `ruff check .` passou. Regressão completa após estas alterações ainda pendente.
+- **Operações remotas:** nenhuma desde o push `ac204fa`.
+
+
+## 2026-11-01 — Busca/substituição, sintaxe e contexto de projeto
+
+- **IDE:** busca/substituição no buffer ativo; substituição global é uma ação única de undo e não salva automaticamente.
+- **Diagnóstico:** checagem Python via AST no conteúdo atual do editor, com navegação para linha/coluna; não executa o projeto.
+- **Contexto:** seleção lexical de trechos do buffer ativo e até três arquivos, limitada a 5.000 caracteres. Habilitada apenas com `off_grid=true`; caminhos sensíveis são ignorados, segredos comuns mascarados e conteúdo declarado como dado não confiável.
+- **CI:** lockfile `uv.lock`; matriz Python 3.11/3.13 em Windows/Ubuntu com `uv sync --locked`.
+- **Arquivos:** `.github/workflows/ci.yml`, `uv.lock`, docs de engenharia, `src/noite/{assistant,ide,mcp_client,store,ui,workspace}.py` e testes correspondentes.
+- **Validação local:** `ruff check .` passou; `pytest -q` — 99 passaram; CLI iniciou/encerrou com `/sair`; `git diff --check` e `uv lock --check` passaram. CI remota ainda não executada.
+- **Bloqueios:** rename/delete e terminal seguem aguardando revisão do desenho de segurança no Slack; execução de Roblox e distribuição standalone não foram validadas.
+- **Git:** alterações locais ainda não commitadas nesta etapa; sem merge.

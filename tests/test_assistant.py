@@ -125,6 +125,57 @@ def test_chat_uses_mocked_local_model_and_history(tmp_path, monkeypatch) -> None
     assert captured["model"] == settings.local_model
 
 
+def test_chat_adds_selective_project_context_as_untrusted_local_data(tmp_path, monkeypatch):
+    from noite import assistant as assistant_module
+
+    source = tmp_path / "src" / "router.py"
+    source.parent.mkdir()
+    source.write_text("def classify_intent(text):\n    return route(text)\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("router_intent=private-token", encoding="utf-8")
+    settings = Settings(_env_file=None, data_dir=tmp_path, off_grid=True)
+    assistant = AssistantService(settings)
+    captured = {}
+
+    async def fake_model(prompt, *, messages=None, model=None):
+        captured["messages"] = messages
+        return "resposta"
+
+    monkeypatch.setattr(assistant_module, "ask_local_model", fake_model)
+    asyncio.run(
+        assistant.respond(
+            "explique router intent classification",
+            project_root=tmp_path,
+            active_file="src/router.py",
+            active_text="def unsaved_active_buffer(): pass",
+        )
+    )
+
+    context_message = captured["messages"][1]["content"]
+    assert "src/router.py" in context_message
+    assert "unsaved_active_buffer" in context_message
+    assert "dado não confiável" in context_message
+    assert "private-token" not in context_message
+
+
+def test_project_context_is_disabled_when_off_grid_is_disabled(tmp_path, monkeypatch):
+    from noite import assistant as assistant_module
+
+    source = tmp_path / "router.py"
+    source.write_text("def classify_intent():\n    return True\n", encoding="utf-8")
+    settings = Settings(_env_file=None, data_dir=tmp_path, off_grid=False)
+    assistant = AssistantService(settings)
+    captured = {}
+
+    async def fake_model(prompt, *, messages=None, model=None):
+        captured["messages"] = messages
+        return "resposta"
+
+    monkeypatch.setattr(assistant_module, "ask_local_model", fake_model)
+    asyncio.run(assistant.respond("explain router classification", project_root=tmp_path))
+
+    assert len(captured["messages"]) == 2
+
+
 def test_model_context_trims_old_messages_to_character_budget(tmp_path, monkeypatch):
     from noite import assistant as assistant_module
     from noite.store import add_message
@@ -177,7 +228,33 @@ def test_cancelled_stream_persists_partial_assistant_reply(tmp_path, monkeypatch
     with open_database(tmp_path / "noite.sqlite3") as connection:
         assert recent_messages(connection) == [
             ("user", "explique gravidade"),
-            ("assistant", "resposta parcial"),
+            (
+                "assistant",
+                "resposta parcial\n\n[resposta parcial: geração cancelada]",
+            ),
+        ]
+
+
+def test_streamed_partial_is_persisted_when_model_times_out(tmp_path, monkeypatch):
+    from noite import assistant as assistant_module
+
+    assistant = AssistantService(Settings(_env_file=None, data_dir=tmp_path))
+
+    async def timeout_after_chunk(prompt, *, messages=None, model=None, on_chunk=None):
+        on_chunk("trecho gerado")
+        raise RuntimeError("timeout simulado")
+
+    monkeypatch.setattr(assistant_module, "ask_local_model", timeout_after_chunk)
+    with pytest.raises(RuntimeError, match="timeout simulado"):
+        asyncio.run(assistant.respond("pergunta", on_chunk=lambda _chunk: None))
+
+    with open_database(assistant.database_path) as connection:
+        assert recent_messages(connection) == [
+            ("user", "pergunta"),
+            (
+                "assistant",
+                "trecho gerado\n\n[resposta parcial: geração interrompida por erro]",
+            ),
         ]
 
 

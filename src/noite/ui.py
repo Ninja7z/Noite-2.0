@@ -6,10 +6,11 @@ import html
 import inspect
 import json
 import logging
+import os
+import re
 import subprocess
 import threading
 from collections.abc import Callable
-from contextlib import closing
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
@@ -41,15 +42,6 @@ from .assistant import AssistantService
 from .config import get_settings
 from .ide import ProjectDock
 from .logging_setup import setup_logging
-from .store import (
-    create_conversation,
-    delete_conversation,
-    get_active_conversation_id,
-    list_conversations,
-    open_database,
-    rename_conversation,
-    set_active_conversation_id,
-)
 
 logger = logging.getLogger("noite.ui")
 
@@ -139,8 +131,7 @@ class NoiteWindow(QMainWindow):
         super().__init__()
         self.settings = get_settings()
         self.service = AssistantService(self.settings)
-        with closing(open_database(self.service.database_path)) as connection:
-            self.conversation_id = get_active_conversation_id(connection)
+        self.conversation_id = self.service.active_conversation_id()
         self.worker: TaskThread | None = None
         self._workers: set[TaskThread] = set()
         self._close_when_idle = False
@@ -192,10 +183,10 @@ class NoiteWindow(QMainWindow):
         side_layout.addWidget(side_title)
         side_layout.addSpacing(16)
         self._side_section(side_layout, "WORKSPACE")
-        project = QLabel("Nenhum projeto aberto")
-        project.setObjectName("projectTile")
-        project.setMinimumHeight(40)
-        side_layout.addWidget(project)
+        self.project_label = QLabel("Nenhum projeto aberto")
+        self.project_label.setObjectName("projectTile")
+        self.project_label.setMinimumHeight(40)
+        side_layout.addWidget(self.project_label)
         self.project_button = QPushButton("Abrir projeto…")
         self.project_button.setObjectName("sideButton")
         self.project_button.clicked.connect(self._open_project)
@@ -293,9 +284,9 @@ class NoiteWindow(QMainWindow):
         composer_layout.setContentsMargins(14, 10, 14, 10)
         composer_layout.setSpacing(8)
         composer_head = QHBoxLayout()
-        composer_project = QLabel("▱   Noite 2.0")
-        composer_project.setObjectName("composerProject")
-        composer_head.addWidget(composer_project)
+        self.composer_project_label = QLabel("▱   Noite 2.0")
+        self.composer_project_label.setObjectName("composerProject")
+        composer_head.addWidget(self.composer_project_label)
         composer_head.addStretch(1)
         self.progress = QLabel("Pronta")
         self.progress.setObjectName("progress")
@@ -332,9 +323,9 @@ class NoiteWindow(QMainWindow):
         shell.addWidget(main, 1)
         self.setCentralWidget(root)
         self.project_dock = ProjectDock(self)
-        self.project_dock.workspace_changed.connect(lambda path: project.setText(Path(path).name))
+        self.project_dock.workspace_changed.connect(self._update_project_context_status)
         if self.project_dock.workspace is not None:
-            project.setText(self.project_dock.workspace.name)
+            self._update_project_context_status(str(self.project_dock.workspace))
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.project_dock)
         self.project_dock.hide()
         self.setStyleSheet(
@@ -389,6 +380,21 @@ class NoiteWindow(QMainWindow):
             "QLabel#footerHint { font-size: 10px; padding-left: 4px; }"
         )
 
+    def _update_project_context_status(self, path: str) -> None:
+        workspace = Path(path)
+        self.project_label.setText(workspace.name)
+        if self.settings.off_grid:
+            self.composer_project_label.setText(f"▱   {workspace.name} · contexto local")
+            self.composer_project_label.setToolTip(
+                "Trechos relevantes e a aba ativa podem ser enviados ao modelo local. "
+                "Nenhum arquivo é alterado automaticamente."
+            )
+        else:
+            self.composer_project_label.setText(f"▱   {workspace.name} · contexto desativado")
+            self.composer_project_label.setToolTip(
+                "O contexto do projeto fica desativado quando o modo off-grid está desligado."
+            )
+
     def _open_project(self) -> None:
         self.project_dock.show()
         self.project_dock.raise_()
@@ -438,8 +444,7 @@ class NoiteWindow(QMainWindow):
             self._append_message(role, content)
 
     def _refresh_conversation_list(self, select_id: str | None = None) -> None:
-        with closing(open_database(self.service.database_path)) as connection:
-            conversations = list_conversations(connection)
+        conversations = self.service.conversations()
         self.conversation_list.blockSignals(True)
         self.conversation_list.clear()
         selected = None
@@ -480,8 +485,7 @@ class NoiteWindow(QMainWindow):
             )
             return
         try:
-            with closing(open_database(self.service.database_path)) as connection:
-                set_active_conversation_id(connection, conversation_id)
+            self.service.set_active_conversation(conversation_id)
         except ValueError:
             self._refresh_conversation_list(self.conversation_id)
             return
@@ -495,9 +499,7 @@ class NoiteWindow(QMainWindow):
                 self, "Geração em andamento", "Aguarde ou cancele a geração antes de continuar."
             )
             return
-        with closing(open_database(self.service.database_path)) as connection:
-            conversation_id = create_conversation(connection)
-            set_active_conversation_id(connection, conversation_id)
+        conversation_id = self.service.create_conversation()
         self.conversation_id = conversation_id
         self._refresh_conversation_list(conversation_id)
         self._load_history()
@@ -513,8 +515,7 @@ class NoiteWindow(QMainWindow):
         if not accepted:
             return
         try:
-            with closing(open_database(self.service.database_path)) as connection:
-                renamed = rename_conversation(connection, str(item.data(Qt.UserRole)), title)
+            renamed = self.service.rename_conversation(str(item.data(Qt.UserRole)), title)
         except ValueError as exc:
             QMessageBox.warning(self, "Título inválido", str(exc))
             return
@@ -537,8 +538,7 @@ class NoiteWindow(QMainWindow):
             != QMessageBox.Yes
         ):
             return
-        with closing(open_database(self.service.database_path)) as connection:
-            active_id = delete_conversation(connection, conversation_id)
+        active_id = self.service.delete_conversation(conversation_id)
         if active_id is not None:
             self.conversation_id = active_id
             self._refresh_conversation_list(active_id)
@@ -603,9 +603,16 @@ class NoiteWindow(QMainWindow):
         self._streaming_response_text = ""
         self.cancel_button.setEnabled(True)
         self.cancel_button.show()
+        workspace = self.project_dock.workspace
+        active_snapshot = self.project_dock.active_document_snapshot()
         self.worker = self._start_worker(
             lambda worker: service.respond(
-                text, conversation_id=conversation_id, on_chunk=worker.streamed.emit
+                text,
+                conversation_id=conversation_id,
+                on_chunk=worker.streamed.emit,
+                project_root=workspace,
+                active_file=active_snapshot[0] if active_snapshot else None,
+                active_text=active_snapshot[1] if active_snapshot else None,
             ),
             completed=self._on_response,
             failed=self._on_error,
@@ -705,9 +712,12 @@ class MCPDialog(QDialog):
         self.command_input.setPlaceholderText("caminho do executável do servidor")
         self.args_input = QLineEdit("[]")
         self.args_input.setPlaceholderText('["arg1", "arg2"]')
+        self.env_vars_input = QLineEdit("[]")
+        self.env_vars_input.setPlaceholderText('["NOME_DA_VARIAVEL"] — somente nomes')
         form.addRow("Nome", self.name_input)
         form.addRow("Executável", self.command_input)
         form.addRow("Argumentos (JSON)", self.args_input)
+        form.addRow("Variáveis de ambiente (JSON)", self.env_vars_input)
         layout.addLayout(form)
 
         row = QHBoxLayout()
@@ -748,6 +758,11 @@ class MCPDialog(QDialog):
                     or not isinstance(value.get("command"), str)
                     or not isinstance(value.get("args", []), list)
                     or not all(isinstance(arg, str) for arg in value.get("args", []))
+                    or not isinstance(value.get("env_vars", []), list)
+                    or not all(
+                        isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+                        for name in value.get("env_vars", [])
+                    )
                 ):
                     raise ValueError("há uma configuração de servidor MCP inválida")
             return {name: value for name, value in data.items()}
@@ -792,27 +807,44 @@ class MCPDialog(QDialog):
         self.name_input.setText(name)
         self.command_input.setText(str(config.get("command", "")))
         self.args_input.setText(json.dumps(config.get("args", []), ensure_ascii=False))
+        self.env_vars_input.setText(json.dumps(config.get("env_vars", []), ensure_ascii=False))
         self.tools.clear()
 
-    def _read_server_form(self) -> tuple[str, str, list[str]]:
+    def _read_server_form(self) -> tuple[str, str, list[str], list[str]]:
         name = self.name_input.text().strip()
         command = self.command_input.text().strip()
         try:
             args = json.loads(self.args_input.text())
         except json.JSONDecodeError as exc:
             raise ValueError("Os argumentos precisam ser uma lista JSON de textos.") from exc
+        try:
+            env_vars = json.loads(self.env_vars_input.text())
+        except json.JSONDecodeError as exc:
+            raise ValueError("Variáveis de ambiente devem ser uma lista JSON de nomes.") from exc
+        executable = Path(command)
         if (
             not name
-            or not command
+            or not executable.is_absolute()
+            or not executable.is_file()
             or not isinstance(args, list)
             or not all(isinstance(arg, str) for arg in args)
+            or not isinstance(env_vars, list)
+            or not all(
+                isinstance(variable, str)
+                and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", variable)
+                and variable in os.environ
+                for variable in env_vars
+            )
         ):
-            raise ValueError("Informe nome, executável e uma lista JSON de argumentos.")
-        return name, command, args
+            raise ValueError(
+                "Informe nome, executável absoluto existente, argumentos e nomes de "
+                "variáveis de ambiente definidas."
+            )
+        return name, str(executable.resolve()), args, env_vars
 
     def _discover(self) -> None:
         try:
-            name, command, args = self._read_server_form()
+            name, command, args, env_vars = self._read_server_form()
         except ValueError as exc:
             QMessageBox.warning(self, "Configuração inválida", str(exc))
             return
@@ -820,13 +852,15 @@ class MCPDialog(QDialog):
             self,
             "Iniciar servidor MCP",
             "Iniciar este processo local para descobrir ferramentas?\n\n"
-            f"{name}\n{subprocess.list2cmdline([command, *args])}",
+            f"{name}\n{subprocess.list2cmdline([command, *args])}\n"
+            f"Diretório de trabalho: {self.data_dir.resolve()}\n"
+            f"Variáveis de ambiente autorizadas: {', '.join(env_vars) or '(nenhuma)'}",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
         if approved != QMessageBox.Yes:
             return
-        configuration = {"command": command, "args": args}
+        configuration = {"command": command, "args": args, "env_vars": env_vars}
         self.servers[name] = configuration
         self._save_servers()
         self._approved[name] = self._server_fingerprint(configuration)
@@ -836,7 +870,13 @@ class MCPDialog(QDialog):
         self.result.setPlainText("Conectando e consultando a lista de ferramentas…")
         from .mcp_client import MCPClient, MCPServer
 
-        server = MCPServer(name, command, tuple(args))
+        server = MCPServer(
+            name,
+            command,
+            tuple(args),
+            cwd=str(self.data_dir.resolve()),
+            env_vars=tuple(env_vars),
+        )
         self.worker = TaskThread(lambda: MCPClient().discover_tools(server), self)
         self.worker.completed.connect(self._show_tools)
         self.worker.failed.connect(lambda message: self.result.setPlainText(message))
@@ -857,7 +897,11 @@ class MCPDialog(QDialog):
     @staticmethod
     def _server_fingerprint(config: dict[str, object]) -> str:
         canonical = json.dumps(
-            {"command": config.get("command"), "args": config.get("args", [])},
+            {
+                "command": config.get("command"),
+                "args": config.get("args", []),
+                "env_vars": config.get("env_vars", []),
+            },
             sort_keys=True,
             separators=(",", ":"),
         )
@@ -912,6 +956,7 @@ class MCPDialog(QDialog):
             return
         command = str(config["command"])
         args = config.get("args", [])
+        env_vars = config.get("env_vars", [])
         command_line = subprocess.list2cmdline([command, *args])
         if (
             QMessageBox.question(
@@ -920,6 +965,8 @@ class MCPDialog(QDialog):
                 "O servidor receberá esta chamada e estes argumentos. "
                 "Respostas do servidor são dados não confiáveis.\n\n"
                 f"Servidor: {name}\nExecutável: {command_line}\nFerramenta: {tool['name']}\n"
+                f"Diretório de trabalho: {self.data_dir.resolve()}\n"
+                f"Variáveis de ambiente autorizadas: {', '.join(env_vars) or '(nenhuma)'}\n"
                 f"Argumentos: {json.dumps(arguments, ensure_ascii=False)}\n\nAutorizar agora?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
@@ -937,6 +984,8 @@ class MCPDialog(QDialog):
             str(config["command"]),
             tuple(config.get("args", [])),
             frozenset({str(tool["name"])}),
+            cwd=str(self.data_dir.resolve()),
+            env_vars=tuple(config.get("env_vars", [])),
         )
         self._set_busy(True)
         self.result.setPlainText("Executando a chamada aprovada…")

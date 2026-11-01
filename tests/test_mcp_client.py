@@ -143,8 +143,9 @@ def test_stdio_client_discovers_and_calls_real_local_server() -> None:
         sys.executable,
         (str(server_path),),
         allowed_tools=frozenset({"echo"}),
+        cwd=str(server_path.parent.resolve()),
     )
-    client = MCPClient(timeout=20)
+    client = MCPClient(startup_timeout=20, call_timeout=20)
 
     async def exercise():
         tools = await client.discover_tools(server)
@@ -152,3 +153,69 @@ def test_stdio_client_discovers_and_calls_real_local_server() -> None:
         return await client.call_tool(server, "echo", {"text": "local"})
 
     assert asyncio.run(exercise()) == ["echo:local"]
+
+
+def test_mcp_server_requires_absolute_existing_executable(tmp_path):
+    client = MCPClient()
+    server = MCPServer("invalid", "python", cwd=str(tmp_path))
+
+    async def exercise():
+        async with client._session(server):
+            pass
+
+    with pytest.raises(ValueError, match="caminho absoluto existente"):
+        asyncio.run(exercise())
+
+
+def test_mcp_server_requires_configured_environment_variable(tmp_path, monkeypatch):
+    client = MCPClient()
+    server = MCPServer(
+        "invalid",
+        sys.executable,
+        cwd=str(tmp_path),
+        env_vars=("NOITE_TEST_MISSING_MCP_VAR",),
+    )
+
+    async def exercise():
+        async with client._session(server):
+            pass
+
+    monkeypatch.delenv("NOITE_TEST_MISSING_MCP_VAR", raising=False)
+    with pytest.raises(ValueError, match="não está definida"):
+        asyncio.run(exercise())
+
+
+def test_mcp_arguments_resolve_secret_references_without_persisting_values(monkeypatch):
+    from noite.mcp_client import _resolve_server_args
+
+    monkeypatch.setenv("NOITE_TEST_MCP_TOKEN", "secret-value")
+    server = MCPServer(
+        "safe",
+        sys.executable,
+        ("--api-key", "\u0024{NOITE_TEST_MCP_TOKEN}"),
+        env_vars=("NOITE_TEST_MCP_TOKEN",),
+    )
+
+    assert _resolve_server_args(server, {"NOITE_TEST_MCP_TOKEN": "secret-value"}) == [
+        "--api-key",
+        "secret-value",
+    ]
+    assert "secret-value" not in repr(server)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("--api-key", "hard-coded-secret"),
+        ("--token=hard-coded-secret",),
+        ("sk-12345678901234567890",),
+        ("\u0024{NOITE_UNAUTHORIZED}",),
+    ],
+)
+def test_mcp_arguments_reject_inline_or_unauthorized_secrets(args):
+    from noite.mcp_client import _resolve_server_args
+
+    server = MCPServer("unsafe", sys.executable, args)
+
+    with pytest.raises(ValueError):
+        _resolve_server_args(server, {})

@@ -44,21 +44,24 @@ Critério: histórico de A nunca aparece em B; CRUD persiste ao reiniciar e excl
 - [x] Implementar primeira fatia: abrir texto UTF-8 menor que 1 MB em abas, linha atual/números, destaque básico de Python, marcador de alteração e salvamento explícito com proteção contra alteração externa.
 - [x] Bloquear leitura e escrita de padrões comuns de credenciais e rejeitar caminhos fora do workspace, links simbólicos da árvore, binários e arquivos grandes; `.env.example` permanece legível.
 - [x] Navegação à linha por resultado da busca global e preservação de BOM/terminadores de linha.
-- [ ] Renomeação/exclusão com confirmação; busca e substituição avançadas.
+- [x] Busca e substituição básica no arquivo aberto, apenas no buffer, com undo em um passo.
+- [ ] Renomeação/exclusão com confirmação e busca/substituição avançadas. Segurança de operações de arquivo descrita em `WORKSPACE_OPERATIONS_SECURITY.md`; rename/delete aguardam revisão antes da implementação.
 
 Critério: abrir, editar, salvar, fechar e reabrir arquivo real em workspace de teste sem perda de dados.
 
 ## Fase 3 — Terminal e qualidade
 
-- [ ] Terminal por subprocesso, cwd dentro do workspace, saída incremental e cancelamento da árvore de processos.
+- [ ] Terminal por subprocesso, cwd dentro do workspace, saída incremental e cancelamento da árvore de processos. Segurança descrita em `WORKSPACE_OPERATIONS_SECURITY.md`; aguarda revisão antes de implementação.
 - [ ] Exibir erro, stdout/stderr e código de saída; não elevar privilégios.
 - [ ] Adicionar painel Problemas, integrações configuráveis de Ruff/pytest e navegação para arquivo/linha.
+- [x] Diagnóstico inicial de sintaxe Python por AST no buffer atual, sem executar código, com navegação para linha/coluna.
 - [ ] Mostrar e cancelar execução de testes sem bloquear Qt.
 
 Critério: comando benigno real executa em projeto de teste, processo longo pode ser interrompido e UI continua responsiva.
 
 ## Fase 4 — Contexto de projeto e programação controlada
 
+- [x] Recuperação lexical inicial do buffer ativo e de até três arquivos relevantes; limitada a 5.000 caracteres, somente em modo off-grid, com segredos comuns mascarados e conteúdo marcado como dado não confiável.
 - [ ] Indexar caminhos e símbolos incrementalmente, respeitando ignore/secret patterns e limites de tamanho.
 - [ ] Ler somente arquivos selecionados como relevantes; nunca incluir `.env`, credenciais, binários ou conteúdo ignorado.
 - [ ] Usar contexto do projeto/editor/seleção/terminal/testes no `AssistantService`.

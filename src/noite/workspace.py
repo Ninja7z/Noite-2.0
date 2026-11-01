@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -11,6 +12,8 @@ MAX_TEXT_FILE_BYTES = 1_000_000
 MAX_SEARCH_FILES = 5_000
 MAX_SEARCH_BYTES = 100_000_000
 MAX_SEARCH_RESULTS = 1_000
+MAX_CONTEXT_FILES = 3
+MAX_PROJECT_CONTEXT_CHARS = 5_000
 BLOCKED_NAMES = {
     ".env",
     ".env.local",
@@ -26,6 +29,14 @@ BLOCKED_NAMES = {
 }
 BLOCKED_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
 BLOCKED_DIRECTORIES = {".ssh", ".aws", ".azure", ".gnupg"}
+_SECRET_VALUE = re.compile(
+    r"(?i)\b(api[_-]?key|access[_-]?token|password|secret)\b"
+    r"(\s*[:=]\s*)([\"']?)[A-Za-z0-9_./+=:-]{8,}([\"']?)"
+)
+_KNOWN_TOKEN = re.compile(
+    r"(?:sk-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|"
+    r"xox[baprs]-[A-Za-z0-9-]{12,}|AKIA[A-Z0-9]{16})"
+)
 
 
 @dataclass(frozen=True)
@@ -235,3 +246,127 @@ def search_workspace_text(
             if files_scanned % 100 == 0:
                 progress(f"Arquivos examinados: {files_scanned}")
     return matches
+
+
+def retrieve_workspace_context(
+    workspace: Path,
+    query: str,
+    *,
+    active_file: str | None = None,
+    active_text: str | None = None,
+    max_chars: int = MAX_PROJECT_CONTEXT_CHARS,
+) -> str:
+    """Select small, relevant text excerpts without following links or reading secrets."""
+    root = Path(workspace).resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("O workspace não é uma pasta.")
+    budget = max(0, min(max_chars, MAX_PROJECT_CONTEXT_CHARS))
+    if not budget:
+        return ""
+    ignored = {
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+    }
+    terms = {
+        term.casefold()
+        for term in re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}", query)
+        if term.casefold() not in {"this", "that", "with", "from", "para", "como", "qual"}
+    }
+    selected: list[tuple[str, str]] = []
+    seen: set[Path] = set()
+    if active_file is not None and active_text is not None:
+        candidate = Path(active_file)
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        try:
+            path = candidate.resolve(strict=True)
+            if path.is_relative_to(root) and not _is_sensitive(path) and path.is_file():
+                text = _redact_secret_values(active_text)[: min(MAX_TEXT_FILE_BYTES, budget)]
+                selected.append((path.relative_to(root).as_posix(), text))
+                seen.add(path)
+        except (OSError, ValueError):
+            pass
+    if terms and len(selected) < MAX_CONTEXT_FILES:
+        ranked: list[tuple[int, Path, str]] = []
+        scanned_bytes = 0
+        scanned_files = 0
+        for current, directories, filenames in os.walk(root, followlinks=False):
+            current_path = Path(current)
+            directories[:] = [
+                name
+                for name in directories
+                if name.casefold() not in ignored
+                and not _is_sensitive(current_path / name)
+                and not (current_path / name).is_symlink()
+                and not (
+                    hasattr(current_path / name, "is_junction")
+                    and (current_path / name).is_junction()
+                )
+            ]
+            for filename in filenames:
+                path = current_path / filename
+                if path in seen or _is_sensitive(path) or path.is_symlink():
+                    continue
+                if hasattr(path, "is_junction") and path.is_junction():
+                    continue
+                try:
+                    size = path.stat().st_size
+                    if size > MAX_TEXT_FILE_BYTES or scanned_bytes + size > 20_000_000:
+                        continue
+                    raw = path.read_bytes()
+                except OSError:
+                    continue
+                scanned_files += 1
+                scanned_bytes += len(raw)
+                if scanned_files > 500:
+                    return _format_project_context(selected, budget)
+                if b"\0" in raw:
+                    continue
+                try:
+                    content = _redact_secret_values(raw.decode("utf-8-sig"))
+                except UnicodeDecodeError:
+                    continue
+                folded = content.casefold()
+                score = sum(folded.count(term) for term in terms)
+                if not score:
+                    continue
+                excerpts = []
+                for line_number, line in enumerate(content.splitlines(), start=1):
+                    if any(term in line.casefold() for term in terms):
+                        excerpts.append(f"{line_number}: {line[:300]}")
+                    if len(excerpts) >= 8:
+                        break
+                ranked.append((score, path, "\n".join(excerpts)))
+        ranked.sort(key=lambda item: (-item[0], item[1].as_posix().casefold()))
+        for _score, path, excerpt in ranked:
+            selected.append((path.relative_to(root).as_posix(), excerpt))
+            if len(selected) >= MAX_CONTEXT_FILES:
+                break
+    return _format_project_context(selected, budget)
+
+
+def _redact_secret_values(text: str) -> str:
+    text = _SECRET_VALUE.sub(r"\1\2\3[REDACTED]\4", text)
+    return _KNOWN_TOKEN.sub("[REDACTED]", text)
+
+
+def _format_project_context(files: list[tuple[str, str]], budget: int) -> str:
+    parts: list[str] = []
+    remaining = budget
+    for name, excerpt in files:
+        section = f"--- {name} ---\n{excerpt.strip()}\n"
+        if len(section) > remaining:
+            section = section[:remaining]
+        if section:
+            parts.append(section)
+            remaining -= len(section)
+        if remaining <= 0:
+            break
+    return "\n".join(parts)

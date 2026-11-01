@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 import threading
 from pathlib import Path
@@ -13,6 +14,7 @@ from PySide6.QtGui import (
     QSyntaxHighlighter,
     QTextCharFormat,
     QTextCursor,
+    QTextDocument,
 )
 from PySide6.QtWidgets import (
     QDialog,
@@ -316,20 +318,56 @@ class ProjectDock(QDockWidget):
         self.create_directory_button.setToolTip("Criar pasta, após confirmação")
         self.create_directory_button.clicked.connect(self.create_directory)
         self.find_file_button = QPushButton("Localizar")
-        self.find_file_button.setToolTip("Localizar texto na aba ativa (Ctrl+F)")
-        self.find_file_button.clicked.connect(self.find_in_current_file)
+        self.find_file_button.setToolTip("Localizar e substituir na aba ativa (Ctrl+F)")
+        self.find_file_button.clicked.connect(self.show_find_replace)
         self.search_button = QPushButton("Buscar")
         self.search_button.clicked.connect(self.open_global_search)
         self.save_button = QPushButton("Salvar")
         self.save_button.setEnabled(False)
         self.save_button.clicked.connect(self.save_current)
+        self.syntax_button = QPushButton("Sintaxe")
+        self.syntax_button.setToolTip(
+            "Verificar sintaxe Python no buffer aberto; não executa o arquivo"
+        )
+        self.syntax_button.clicked.connect(self.check_python_syntax)
         toolbar.addWidget(self.open_button)
         toolbar.addWidget(self.create_file_button)
         toolbar.addWidget(self.create_directory_button)
         toolbar.addWidget(self.find_file_button)
         toolbar.addWidget(self.search_button)
         toolbar.addWidget(self.save_button)
+        toolbar.addWidget(self.syntax_button)
         layout.addWidget(toolbar)
+        self.find_bar = QWidget()
+        find_layout = QHBoxLayout(self.find_bar)
+        find_layout.setContentsMargins(0, 0, 0, 0)
+        self.find_input = QLineEdit()
+        self.find_input.setPlaceholderText("Localizar (sensível a maiúsculas)")
+        self.replace_input = QLineEdit()
+        self.replace_input.setPlaceholderText("Substituir por")
+        self.find_next_button = QPushButton("Próximo")
+        self.find_next_button.clicked.connect(self.find_next)
+        self.find_input.returnPressed.connect(self.find_next)
+        self.replace_button = QPushButton("Substituir")
+        self.replace_button.clicked.connect(self.replace_current)
+        self.replace_all_button = QPushButton("Tudo")
+        self.replace_all_button.clicked.connect(self.replace_all)
+        self.find_status = QLabel()
+        self.find_close_button = QPushButton("×")
+        self.find_close_button.setToolTip("Fechar busca")
+        self.find_close_button.clicked.connect(self.find_bar.hide)
+        for widget in (
+            self.find_input,
+            self.replace_input,
+            self.find_next_button,
+            self.replace_button,
+            self.replace_all_button,
+            self.find_status,
+            self.find_close_button,
+        ):
+            find_layout.addWidget(widget)
+        self.find_bar.hide()
+        layout.addWidget(self.find_bar)
         self.workspace_label = QLabel("Nenhum projeto aberto")
         self.workspace_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.workspace_label.setWordWrap(True)
@@ -353,11 +391,15 @@ class ProjectDock(QDockWidget):
         body.addWidget(self.tabs)
         body.setSizes([300, 450])
         layout.addWidget(body, 1)
+        self.problems = QListWidget()
+        self.problems.setMaximumHeight(110)
+        self.problems.itemDoubleClicked.connect(self._navigate_to_problem)
+        layout.addWidget(self.problems)
         self.setWidget(root)
         self.setMinimumWidth(500)
         self._restore_workspace()
         shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
-        shortcut.activated.connect(self.find_in_current_file)
+        shortcut.activated.connect(self.show_find_replace)
         self._find_shortcut = shortcut
         self._set_workspace_actions_enabled(self.workspace is not None)
 
@@ -424,26 +466,71 @@ class ProjectDock(QDockWidget):
         ):
             button.setEnabled(enabled)
 
-    def find_in_current_file(self) -> None:
+    def show_find_replace(self) -> None:
         current = self._current_document()
         if current is None:
             QMessageBox.information(
                 self, "Nenhum arquivo aberto", "Abra um arquivo antes de localizar texto."
             )
             return
-        _path, editor, _digest, _line_ending, _has_bom = current
-        query, accepted = QInputDialog.getText(self, "Localizar no arquivo", "Texto:")
-        if not accepted or not query:
-            return
-        if editor.find(query):
-            return
+        self.find_bar.show()
+        self.find_input.setFocus()
+        self.find_input.selectAll()
+
+    def find_next(self) -> bool:
+        current = self._current_document()
+        query = self.find_input.text()
+        if current is None or not query:
+            return False
+        editor = current[1]
+        if editor.find(query, QTextDocument.FindFlag.FindCaseSensitively):
+            self.find_status.setText("Encontrado")
+            return True
         cursor = editor.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.Start)
         editor.setTextCursor(cursor)
-        if not editor.find(query):
-            QMessageBox.information(
-                self, "Texto não encontrado", "O texto não aparece neste arquivo."
+        found = editor.find(query, QTextDocument.FindFlag.FindCaseSensitively)
+        self.find_status.setText("Encontrado desde o início" if found else "Não encontrado")
+        return found
+
+    def replace_current(self) -> bool:
+        current = self._current_document()
+        query = self.find_input.text()
+        if current is None or not query:
+            return False
+        editor = current[1]
+        cursor = editor.textCursor()
+        replaced = cursor.hasSelection() and cursor.selectedText() == query
+        if replaced:
+            cursor.insertText(self.replace_input.text())
+            editor.setTextCursor(cursor)
+        found = self.find_next()
+        if replaced and not found:
+            self.find_status.setText("Substituído")
+        return replaced or found
+
+    def replace_all(self) -> int:
+        current = self._current_document()
+        query = self.find_input.text()
+        if current is None or not query:
+            return 0
+        editor = current[1]
+        cursor = QTextCursor(editor.document())
+        cursor.beginEditBlock()
+        count = 0
+        while True:
+            match = editor.document().find(
+                query, cursor, QTextDocument.FindFlag.FindCaseSensitively
             )
+            if match.isNull():
+                break
+            match.insertText(self.replace_input.text())
+            cursor = match
+            count += 1
+        cursor.endEditBlock()
+        editor.setTextCursor(cursor)
+        self.find_status.setText(f"{count} substituição(ões)")
+        return count
 
     def create_file(self) -> None:
         if self.workspace is None:
@@ -539,6 +626,17 @@ class ProjectDock(QDockWidget):
                 return path, editor, digest, line_ending, has_bom
         return None
 
+    def active_document_snapshot(self) -> tuple[str, str] | None:
+        current = self._current_document()
+        if current is None or self.workspace is None:
+            return None
+        path, editor, _digest, _line_ending, _has_bom = current
+        try:
+            relative = Path(path).resolve(strict=True).relative_to(self.workspace).as_posix()
+        except (OSError, ValueError):
+            return None
+        return relative, editor.toPlainText()
+
     def _refresh_title(self, path: str) -> None:
         document = self._documents.get(path)
         if document is None:
@@ -556,6 +654,49 @@ class ProjectDock(QDockWidget):
         current = self._current_document()
         self.save_button.setEnabled(bool(current and current[1].document().isModified()))
         self.find_file_button.setEnabled(current is not None)
+        self.syntax_button.setEnabled(current is not None)
+
+    def check_python_syntax(self) -> None:
+        current = self._current_document()
+        if current is None:
+            return
+        path, editor, _digest, _line_ending, _has_bom = current
+        self.problems.clear()
+        if Path(path).suffix.casefold() not in {".py", ".pyw"}:
+            self.problems.addItem("Verificação de sintaxe disponível apenas para Python.")
+            return
+        try:
+            ast.parse(editor.toPlainText(), filename=Path(path).name)
+        except SyntaxError as exc:
+            item = QListWidgetItem(
+                f"{Path(path).name}:{exc.lineno or 1}:{exc.offset or 1}: "
+                f"{exc.msg or 'erro de sintaxe'}"
+            )
+            item.setData(Qt.ItemDataRole.UserRole, (exc.lineno or 1, exc.offset or 1))
+            self.problems.addItem(item)
+        else:
+            self.problems.addItem(f"{Path(path).name}: sintaxe válida")
+
+    def _navigate_to_problem(self, item: QListWidgetItem) -> None:
+        location = item.data(Qt.ItemDataRole.UserRole)
+        current = self._current_document()
+        if location is None or current is None:
+            return
+        line, column = location
+        cursor = current[1].textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        cursor.movePosition(
+            QTextCursor.MoveOperation.NextBlock,
+            QTextCursor.MoveMode.MoveAnchor,
+            max(0, line - 1),
+        )
+        cursor.movePosition(
+            QTextCursor.MoveOperation.Right,
+            QTextCursor.MoveMode.MoveAnchor,
+            max(0, column - 1),
+        )
+        current[1].setTextCursor(cursor)
+        current[1].setFocus()
 
     def save_current(self) -> None:
         current = self._current_document()
