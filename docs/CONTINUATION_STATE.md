@@ -13,24 +13,28 @@ Construir uma assistente desktop local-first funcional sem executar ações arbi
 - Persistência SQLite de mensagens com identificador de conversa e migração compatível.
 - Pesquisa apenas de nomes no workspace configurado, sem abrir ou ler arquivos.
 - Cliente MCP stdio experimental: descoberta, validação JSON Schema, allowlist, timeout e teste com servidor local.
+- Painel MCP na UI para configuração local de servidores, descoberta após confirmação e aprovação explícita de cada chamada com visualização dos argumentos.
+- Encerramento coordenado da janela: fechamento é adiado até as threads ativas concluírem, sem destruir QThread em execução.
+- Workflow GitHub Actions para Ruff, pytest e smoke test do CLI em Ubuntu e Windows.
 - Documentação de inventário e limites MCP.
 
 ## Validação executada
 
-- pytest -q: 27 passaram na validação final.
+- pytest -q: 30 testes passaram, incluindo fechamento durante tarefa ativa, negação sem aprovação MCP e chamada aprovada com allowlist unitária.
 - ruff check .: passou.
-- GUI: smoke test PySide6 offscreen passou; a janela foi criada e o event loop foi iniciado.
-- CLI: validado em etapa anterior, permanece acessível com python -m noite --cli.
+- GUI: janela real inspecionada no Windows; status exibiu Ollama conectado e o painel MCP foi conferido visualmente. Testes offscreen cobrem o ciclo de fechamento e aprovação.
+- CI: workflow adicionado para Ruff, pytest e CLI em Ubuntu e Windows. Execuções remotas dependem do push da atualização; nenhum resultado de CI foi alegado antes disso.
+- CLI: validado em etapa anterior, permanece acessível com `python -m noite --cli`.
 - Chamada Ollama real: gateway respondeu OK após elevar o timeout configurável para 180 s.
 
 ## Pendências
 
-- MCP não está ligado à UI nem ao fluxo do chat. Não há tela de configuração/aprovação de servidores.
+- MCP está disponível no painel da UI com confirmação por chamada; não é invocado automaticamente pelo modelo. Revisão de permissões e resultados de servidores de terceiros permanece uma decisão consciente do usuário.
 - Abertura de aplicativo continua indisponível; pesquisa lista nomes somente no workspace configurado.
 - Não há streaming nem botão de cancelamento de geração.
 - A interface MCP ainda não permite configurar/inspecionar servidores; a biblioteca de cliente é funcional e testada por stdio.
 - Revisar teste de carregamento .env: verifica URL configurada; override de modelo por dotenv não está coberto.
-- GUI foi smoke-tested offscreen, sem avaliação visual/interativa em sessão desktop.
+- Streaming e cancelamento de geração ainda não existem; fechar a janela espera a tarefa atual concluir (timeout do modelo configurado até 180 s).
 
 ## Execução
 
@@ -44,9 +48,9 @@ Construir uma assistente desktop local-first funcional sem executar ações arbi
 
 - Branch atual: codex/stabilize-core.
 - Base remota correta: Ninja7z/Noite-2.0, main 9af7993.
-- Checkpoint local será criado nesta etapa; branch e PR serão publicados sem merge.
-- Não fazer push, merge ou publicar até autorização explícita.
+- PR #1: https://github.com/Ninja7z/Noite-2.0/pull/1 (draft, sem merge).
+- Atualizações desta continuação devem entrar na mesma branch do PR; não fazer merge.
 
 ## Próxima ação
 
-Executar testes e Ruff após mudanças finais, revisar diff, criar checkpoint local e entregar estado. Em continuação: ligar a configuração MCP à interface com confirmação explícita.
+Executar validação final, publicar atualização no PR draft e conferir o status do CI. Implementar streaming e cancelamento em uma etapa posterior.
