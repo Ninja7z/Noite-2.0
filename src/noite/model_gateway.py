@@ -10,6 +10,7 @@ async def ask_local_model(
     prompt: str, *, messages: Sequence[dict[str, str]] | None = None, model: str | None = None
 ) -> str:
     settings = get_settings()
+    timeout_seconds = getattr(settings, "model_timeout_seconds", 180)
     try:
         response = await acompletion(
             model=f"ollama/{model or settings.local_model}",
@@ -19,12 +20,12 @@ async def ask_local_model(
                 if messages is not None
                 else [{"role": "user", "content": prompt}]
             ),
-            timeout=30,
+            timeout=timeout_seconds,
             num_retries=0,
         )
     except Timeout:
         raise RuntimeError(
-            "O modelo local excedeu o tempo limite de 30 segundos."
+            f"O modelo local excedeu o tempo limite de {timeout_seconds} segundos."
         ) from None
     except APIConnectionError:
         raise RuntimeError("Não foi possível conectar ao Ollama local.") from None

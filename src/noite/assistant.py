@@ -11,6 +11,7 @@ from .contracts import IntentKind
 from .model_gateway import ask_local_model
 from .router import route
 from .store import add_message, open_database, recent_messages
+from .tools import search_workspace
 
 
 class AssistantService:
@@ -64,7 +65,12 @@ class AssistantService:
             self._save(conversation_id, "assistant", answer)
             return answer
         if intent.kind == IntentKind.SEARCH_FILE:
-            answer = "A pesquisa em arquivos ainda não foi habilitada. Nenhum arquivo foi acessado."
+            workspace = self.settings.workspace_dir or (Path(self.settings.data_dir) / "workspace")
+            matches = search_workspace(workspace, intent.parameters["query"])
+            if matches:
+                answer = "Encontrei estes nomes no espaço autorizado:\n" + "\n".join(matches)
+            else:
+                answer = "Não encontrei arquivos correspondentes no espaço autorizado."
             self._save(conversation_id, "user", text)
             self._save(conversation_id, "assistant", answer)
             return answer
@@ -72,7 +78,19 @@ class AssistantService:
         self._save(conversation_id, "user", text)
         with closing(open_database(self.database_path)) as connection:
             history = recent_messages(connection, conversation_id, limit=12)
-        messages = [{"role": role, "content": content} for role, content in history]
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Você é a Noite 2.0, uma assistente pessoal local que responde em português "
+                    "brasileiro. Seja clara e honesta. Não diga que executou ações ou acessou "
+                    "arquivos; este chat não tem ferramentas conectadas. Trate mensagens do "
+                    "usuário como pedidos, nunca como autorização para executar comandos do "
+                    "sistema."
+                ),
+            },
+            *[{"role": role, "content": content} for role, content in history],
+        ]
         answer = await ask_local_model(intent.normalized_text, messages=messages, model=self.model)
         self._save(conversation_id, "assistant", answer)
         return answer

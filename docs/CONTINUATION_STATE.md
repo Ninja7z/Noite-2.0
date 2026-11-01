@@ -9,24 +9,26 @@ Construir uma assistente desktop local-first funcional sem executar ações arbi
 - Interface desktop PySide6 com chat, Enter/Shift+Enter, seleção de modelo por sessão, estado Ollama, histórico e worker em thread.
 - Serviço de conversa com respostas determinísticas de saudação, despedida, ajuda, hora, data, status e identidade.
 - Conversa livre conectada ao gateway Ollama e contexto limitado às 12 mensagens recentes.
+- Geração real pelo gateway e pelo serviço de conversa confirmada com qwen2.5:3b; a geração fria inicial levou cerca de 131 s.
 - Persistência SQLite de mensagens com identificador de conversa e migração compatível.
-- Cliente MCP stdio experimental: descoberta, validação JSON Schema, allowlist e timeout.
+- Pesquisa apenas de nomes no workspace configurado, sem abrir ou ler arquivos.
+- Cliente MCP stdio experimental: descoberta, validação JSON Schema, allowlist, timeout e teste com servidor local.
 - Documentação de inventário e limites MCP.
 
 ## Validação executada
 
-- pytest -q: 22 passaram.
+- pytest -q: 27 passaram na validação final.
 - ruff check .: passou.
 - GUI: smoke test PySide6 offscreen passou; a janela foi criada e o event loop foi iniciado.
 - CLI: validado em etapa anterior, permanece acessível com python -m noite --cli.
-- Chamada Ollama real: tentativa anterior excedeu timeout 30 s; ainda não há confirmação de geração bem-sucedida nesta etapa.
+- Chamada Ollama real: gateway respondeu OK após elevar o timeout configurável para 180 s.
 
 ## Pendências
 
 - MCP não está ligado à UI nem ao fluxo do chat. Não há tela de configuração/aprovação de servidores.
-- Ferramentas locais de arquivo e abertura de aplicativo continuam indisponíveis.
+- Abertura de aplicativo continua indisponível; pesquisa lista nomes somente no workspace configurado.
 - Não há streaming nem botão de cancelamento de geração.
-- Validar chamada real ao Ollama no endpoint/modelo atual.
+- A interface MCP ainda não permite configurar/inspecionar servidores; a biblioteca de cliente é funcional e testada por stdio.
 - Revisar teste de carregamento .env: verifica URL configurada; override de modelo por dotenv não está coberto.
 - GUI foi smoke-tested offscreen, sem avaliação visual/interativa em sessão desktop.
 
@@ -42,9 +44,9 @@ Construir uma assistente desktop local-first funcional sem executar ações arbi
 
 - Branch atual: codex/stabilize-core.
 - Base remota correta: Ninja7z/Noite-2.0, main 9af7993.
-- Alterações desta etapa estão locais e sem commit ainda.
+- Checkpoint local será criado nesta etapa; branch e PR serão publicados sem merge.
 - Não fazer push, merge ou publicar até autorização explícita.
 
 ## Próxima ação
 
-Executar testes e Ruff após mudanças finais, revisar diff, criar checkpoint local e entregar estado. Em continuação: validar geração Ollama, depois ligar a configuração MCP à interface com confirmação explícita.
+Executar testes e Ruff após mudanças finais, revisar diff, criar checkpoint local e entregar estado. Em continuação: ligar a configuração MCP à interface com confirmação explícita.

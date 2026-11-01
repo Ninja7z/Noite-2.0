@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -70,3 +71,23 @@ def test_call_tool_validates_schema_and_returns_data() -> None:
     assert asyncio.run(client.call_tool(server, "lookup", {"term": "hello"})) == [
         "Untrusted result"
     ]
+
+
+def test_stdio_client_discovers_and_calls_real_local_server() -> None:
+    from pathlib import Path
+
+    server_path = Path(__file__).with_name("mcp_echo_server.py")
+    server = MCPServer(
+        "integration",
+        sys.executable,
+        (str(server_path),),
+        allowed_tools=frozenset({"echo"}),
+    )
+    client = MCPClient(timeout=20)
+
+    async def exercise():
+        tools = await client.discover_tools(server)
+        assert any(tool["name"] == "echo" for tool in tools)
+        return await client.call_tool(server, "echo", {"text": "local"})
+
+    assert asyncio.run(exercise()) == ["echo:local"]

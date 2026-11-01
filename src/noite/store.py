@@ -45,6 +45,18 @@ def open_database(path: Path) -> sqlite3.Connection:
         END;
         """
     )
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS noite_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    fts_version = connection.execute(
+        "SELECT value FROM noite_metadata WHERE key = 'fts_sync_version'"
+    ).fetchone()
+    if fts_version is None:
+        connection.execute("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')")
+        connection.execute(
+            "INSERT INTO noite_metadata(key, value) VALUES ('fts_sync_version', '1')"
+        )
+    connection.commit()
     return connection
 
 

@@ -12,7 +12,7 @@ def _run(coroutine):
 
 def test_ask_local_model_returns_content(monkeypatch) -> None:
     async def fake_completion(**kwargs):
-        assert kwargs["timeout"] == 30
+        assert kwargs["timeout"] == 180
         assert kwargs["num_retries"] == 0
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="resposta local"))]
@@ -31,7 +31,7 @@ def test_ask_local_model_returns_content(monkeypatch) -> None:
 @pytest.mark.parametrize(
     ("exception_name", "message"),
     [
-        ("Timeout", "O modelo local excedeu o tempo limite de 30 segundos."),
+        ("Timeout", "O modelo local excedeu o tempo limite de 180 segundos."),
         ("APIConnectionError", "Não foi possível conectar ao Ollama local."),
         ("OpenAIError", "O provedor do modelo local retornou um erro."),
     ],

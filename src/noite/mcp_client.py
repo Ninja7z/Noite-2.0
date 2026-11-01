@@ -52,19 +52,17 @@ class MCPClient:
     ) -> list[str]:
         if name not in server.allowed_tools:
             raise PermissionError(f"A ferramenta MCP '{name}' não está autorizada.")
-        tools = await self.discover_tools(server)
-        tool = next((candidate for candidate in tools if candidate["name"] == name), None)
-        if tool is None:
-            raise LookupError(f"A ferramenta MCP '{name}' não foi encontrada.")
-
-        try:
-            from jsonschema import validate
-
-            validate(instance=arguments, schema=tool["input_schema"])
-        except ImportError as exc:
-            raise RuntimeError("Instale o extra MCP com: pip install -e '.[mcp]'") from exc
-
         async with self._session(server) as session:
+            response = await session.list_tools()
+            tool = next((candidate for candidate in response.tools if candidate.name == name), None)
+            if tool is None:
+                raise LookupError(f"A ferramenta MCP '{name}' não foi encontrada.")
+            try:
+                from jsonschema import validate
+
+                validate(instance=arguments, schema=tool.inputSchema)
+            except ImportError as exc:
+                raise RuntimeError("Instale o extra MCP com: pip install -e '.[mcp]'") from exc
             result = await session.call_tool(name, arguments)
         if result.isError:
             raise RuntimeError("O servidor MCP informou falha ao executar a ferramenta.")

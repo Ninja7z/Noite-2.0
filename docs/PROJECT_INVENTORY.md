@@ -22,8 +22,9 @@
 - GUI PySide6: chat, envio por botão/Enter, histórico visível, seleção do modelo por sessão, estado do Ollama e trabalho de rede fora da thread da UI.
 - Respostas rápidas locais: saudação, despedida, ajuda, hora, data, estado e descrição da Noite.
 - Conversa livre encaminhada ao gateway local; histórico SQLite limitado a 12 mensagens no contexto.
-- A intenção é classificada separadamente da execução. Abertura de aplicativos e busca de arquivos são recusadas/informadas como ainda indisponíveis.
-- Ferramentas locais, cliente MCP, voz, agentes, streaming e cancelamento não estão implementados.
+- Pesquisa de nomes somente sob workspace configurado; nenhum conteúdo de arquivo é lido.
+- Cliente MCP stdio inicial com descoberta, validação, allowlist e teste contra servidor local; ainda não ligado à UI/chat.
+- Abertura de aplicativos, voz, agentes, streaming e cancelamento não estão implementados.
 
 ## Decisões e limites
 
