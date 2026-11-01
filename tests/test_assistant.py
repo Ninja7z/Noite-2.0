@@ -68,3 +68,34 @@ def test_chat_uses_mocked_local_model_and_history(tmp_path, monkeypatch) -> None
     assert captured["messages"][0]["role"] == "system"
     assert captured["messages"][-1] == {"role": "user", "content": "explique gravidade"}
     assert captured["model"] == settings.local_model
+
+
+def test_cancelled_stream_persists_partial_assistant_reply(tmp_path, monkeypatch) -> None:
+    from noite import assistant as assistant_module
+
+    assistant = AssistantService(Settings(_env_file=None, data_dir=tmp_path))
+    started = asyncio.Event()
+
+    async def fake_model(prompt, *, messages=None, model=None, on_chunk=None):
+        on_chunk("resposta parcial")
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(assistant_module, "ask_local_model", fake_model)
+
+    async def exercise():
+        task = asyncio.create_task(assistant.respond("explique gravidade", on_chunk=lambda _: None))
+        await started.wait()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return
+        raise AssertionError("a tarefa deveria propagar cancelamento")
+
+    asyncio.run(exercise())
+    with open_database(tmp_path / "noite.sqlite3") as connection:
+        assert recent_messages(connection) == [
+            ("user", "explique gravidade"),
+            ("assistant", "resposta parcial"),
+        ]

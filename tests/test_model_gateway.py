@@ -69,3 +69,35 @@ def test_unexpected_errors_are_not_silenced(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="unexpected"):
         _run(model_gateway.ask_local_model("oi"))
+
+
+def test_streaming_yields_each_text_delta(monkeypatch) -> None:
+    chunks = [
+        SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="Olá"))]),
+        SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=" mundo"))]),
+    ]
+
+    class FakeStream:
+        def __aiter__(self):
+            async def items():
+                for chunk in chunks:
+                    yield chunk
+
+            return items()
+
+    async def fake_completion(**kwargs):
+        assert kwargs["stream"] is True
+        return FakeStream()
+
+    monkeypatch.setattr(model_gateway, "acompletion", fake_completion)
+    monkeypatch.setattr(
+        model_gateway,
+        "get_settings",
+        lambda: SimpleNamespace(local_model="test-model", ollama_base_url="http://localhost"),
+    )
+    received = []
+
+    result = _run(model_gateway.ask_local_model("oi", on_chunk=received.append))
+
+    assert result == "Olá mundo"
+    assert received == ["Olá", " mundo"]

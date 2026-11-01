@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import html
+import inspect
 import json
 import shlex
+import threading
 from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtGui import QKeyEvent, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -51,16 +53,59 @@ class InputBox(QPlainTextEdit):
 class TaskThread(QThread):
     completed = Signal(object)
     failed = Signal(str)
+    cancelled = Signal()
+    streamed = Signal(str)
 
     def __init__(self, task: Callable[[], object], parent=None) -> None:
         super().__init__(parent)
         self.task = task
+        self._cancel_requested = threading.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._async_task: asyncio.Task | None = None
 
     def run(self) -> None:
         try:
-            self.completed.emit(self.task())
+            result = self.task()
+            if inspect.isawaitable(result):
+                result = self._run_async(result)
+            self.completed.emit(result)
+        except asyncio.CancelledError:
+            self.cancelled.emit()
         except Exception as exc:
             self.failed.emit(f"{type(exc).__name__}: não foi possível concluir a operação.")
+
+    def request_cancel(self) -> None:
+        self._cancel_requested.set()
+        loop = self._loop
+        task = self._async_task
+        if loop is not None and task is not None:
+            try:
+                loop.call_soon_threadsafe(task.cancel)
+            except RuntimeError:
+                # The task may finish between reading the loop and scheduling cancellation.
+                pass
+
+    def _run_async(self, awaitable):
+        loop = asyncio.new_event_loop()
+        self._loop = loop
+        asyncio.set_event_loop(loop)
+        task = loop.create_task(awaitable)
+        self._async_task = task
+        if self._cancel_requested.is_set():
+            loop.call_soon(task.cancel)
+        try:
+            return loop.run_until_complete(task)
+        finally:
+            pending = asyncio.all_tasks(loop)
+            for pending_task in pending:
+                pending_task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            asyncio.set_event_loop(None)
+            self._async_task = None
+            self._loop = None
+            loop.close()
 
 
 class NoiteWindow(QMainWindow):
@@ -72,6 +117,8 @@ class NoiteWindow(QMainWindow):
         self.worker: TaskThread | None = None
         self._workers: set[TaskThread] = set()
         self._close_when_idle = False
+        self._streaming_response_active = False
+        self._streaming_response_text = ""
         self.setWindowTitle("Noite 2.0")
         self.resize(900, 680)
         self._build_ui()
@@ -119,8 +166,12 @@ class NoiteWindow(QMainWindow):
         self.send_button = QPushButton("Enviar")
         self.send_button.setDefault(True)
         self.send_button.clicked.connect(self.send_message)
+        self.cancel_button = QPushButton("Cancelar")
+        self.cancel_button.clicked.connect(self.cancel_generation)
+        self.cancel_button.hide()
         compose.addWidget(self.input, 1)
         compose.addWidget(self.send_button)
+        compose.addWidget(self.cancel_button)
         layout.addLayout(compose)
 
         self.progress = QLabel("Local-first · conversas salvas neste computador")
@@ -159,14 +210,36 @@ class NoiteWindow(QMainWindow):
             self._append_message(role, content)
 
     def _check_status(self) -> None:
-        worker = self._start_worker(self.service.model_status)
-        worker.completed.connect(lambda value: self.status_label.setText(str(value)))
-        worker.failed.connect(lambda _error: self.status_label.setText("Estado indisponível"))
+        self._start_worker(
+            lambda _worker: self.service.model_status(),
+            completed=lambda value: self.status_label.setText(str(value)),
+            failed=lambda _error: self.status_label.setText("Estado indisponível"),
+        )
 
-    def _start_worker(self, task: Callable[[], object]) -> TaskThread:
-        worker = TaskThread(task, self)
+    def _start_worker(
+        self,
+        task: Callable[[TaskThread], object],
+        *,
+        completed: Callable[[object], None] | None = None,
+        failed: Callable[[str], None] | None = None,
+        cancelled: Callable[[], None] | None = None,
+        streamed: Callable[[str], None] | None = None,
+        finished: Callable[[], None] | None = None,
+    ) -> TaskThread:
+        worker = None
+        worker = TaskThread(lambda: task(worker), self)
         self._workers.add(worker)
+        if completed is not None:
+            worker.completed.connect(completed)
+        if failed is not None:
+            worker.failed.connect(failed)
+        if cancelled is not None:
+            worker.cancelled.connect(cancelled)
+        if streamed is not None:
+            worker.streamed.connect(streamed)
         worker.finished.connect(lambda current=worker: self._worker_finished(current))
+        if finished is not None:
+            worker.finished.connect(finished)
         worker.start()
         return worker
 
@@ -188,18 +261,64 @@ class NoiteWindow(QMainWindow):
         self.progress.setText("A Noite está pensando…")
         model = self.model_box.currentText().strip() or self.settings.local_model
         self.service = AssistantService(self.settings, model=model)
-        self.worker = self._start_worker(lambda: asyncio.run(self.service.respond(text)))
-        self.worker.completed.connect(self._on_response)
-        self.worker.failed.connect(self._on_error)
-        self.worker.finished.connect(lambda: self.send_button.setEnabled(True))
+        self._streaming_response_active = False
+        self._streaming_response_text = ""
+        self.cancel_button.setEnabled(True)
+        self.cancel_button.show()
+        self.worker = self._start_worker(
+            lambda worker: self.service.respond(text, on_chunk=worker.streamed.emit),
+            completed=self._on_response,
+            failed=self._on_error,
+            cancelled=self._on_cancelled,
+            streamed=self._on_stream_chunk,
+            finished=self._generation_finished,
+        )
+
+    def _generation_finished(self) -> None:
+        self.send_button.setEnabled(True)
+        self.cancel_button.hide()
+
+    def cancel_generation(self) -> None:
+        if self.worker is None or not self.worker.isRunning():
+            return
+        self.cancel_button.setEnabled(False)
+        self.progress.setText("Cancelando geração…")
+        self.worker.request_cancel()
+
+    def _on_stream_chunk(self, chunk: str) -> None:
+        if not self._streaming_response_active:
+            self._append_message("assistant", "")
+            self._streaming_response_active = True
+        self._streaming_response_text += chunk
+        cursor = self.chat.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(chunk)
+        self.chat.setTextCursor(cursor)
+        self.chat.ensureCursorVisible()
 
     def _on_response(self, response: object) -> None:
-        self._append_message("assistant", str(response))
+        if self._streaming_response_active:
+            self._streaming_response_active = False
+            self._streaming_response_text = ""
+        else:
+            self._append_message("assistant", str(response))
         self.progress.setText("Pronta")
 
     def _on_error(self, message: str) -> None:
         self._append_message("assistant", message)
+        self._streaming_response_active = False
+        self._streaming_response_text = ""
         self.progress.setText("A solicitação falhou; você pode tentar novamente.")
+
+    def _on_cancelled(self) -> None:
+        if self._streaming_response_active:
+            cursor = self.chat.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            cursor.insertText("\n[Geração cancelada]")
+            self.chat.setTextCursor(cursor)
+        self._streaming_response_active = False
+        self._streaming_response_text = ""
+        self.progress.setText("Geração cancelada. Você pode enviar outra mensagem.")
 
     def _open_mcp_dialog(self) -> None:
         dialog = MCPDialog(self.settings.data_dir, self)
@@ -211,8 +330,11 @@ class NoiteWindow(QMainWindow):
             self._close_when_idle = True
             self.input.setEnabled(False)
             self.send_button.setEnabled(False)
+            self.cancel_button.setEnabled(False)
             self.mcp_button.setEnabled(False)
-            self.progress.setText("Aguardando as operações em andamento para fechar com segurança…")
+            self.progress.setText("Cancelando as operações para fechar com segurança…")
+            for worker in running:
+                worker.request_cancel()
             event.ignore()
             return
         event.accept()
@@ -350,7 +472,7 @@ class MCPDialog(QDialog):
         from .mcp_client import MCPClient, MCPServer
 
         server = MCPServer(name, command, tuple(args))
-        self.worker = TaskThread(lambda: asyncio.run(MCPClient().discover_tools(server)), self)
+        self.worker = TaskThread(lambda: MCPClient().discover_tools(server), self)
         self.worker.completed.connect(self._show_tools)
         self.worker.failed.connect(lambda message: self.result.setPlainText(message))
         self.worker.finished.connect(self._task_finished)
@@ -409,8 +531,7 @@ class MCPDialog(QDialog):
         self._set_busy(True)
         self.result.setPlainText("Executando a chamada aprovada…")
         self.worker = TaskThread(
-            lambda: asyncio.run(MCPClient().call_tool(server, str(tool["name"]), arguments)),
-            self,
+            lambda: MCPClient().call_tool(server, str(tool["name"]), arguments), self
         )
         self.worker.completed.connect(
             lambda result: self.result.setPlainText("\n".join(map(str, result)))
@@ -435,7 +556,8 @@ class MCPDialog(QDialog):
         if self.worker is not None and self.worker.isRunning():
             self._close_when_idle = True
             self.setEnabled(False)
-            self.result.setPlainText("Aguardando a operação MCP para fechar com segurança…")
+            self.result.setPlainText("Cancelando a operação MCP para fechar com segurança…")
+            self.worker.request_cancel()
             event.ignore()
             return
         event.accept()

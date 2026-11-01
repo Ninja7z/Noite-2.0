@@ -7,8 +7,9 @@ Assistente desktop local-first em português. O MVP inclui chat PySide6, respost
 - Núcleo assíncrono em Python, com contratos validados por Pydantic.
 - Roteador determinístico para comandos simples e encaminhamento de conversas ao modelo local.
 - LiteLLM como gateway; Ollama com `qwen2.5:3b` como modelo local inicial.
+- Respostas do modelo aparecem em streaming; o usuário pode cancelar uma geração ativa.
 - SQLite com FTS5 para histórico textual. A extensão vetorial fica para uma etapa posterior.
-- Interface PySide6 funcional está disponível como extra opcional. Automação do Windows continua fora do MVP.
+- Interface PySide6 funcional está disponível como extra opcional, com painel MCP para servidores stdio configurados localmente e chamadas aprovadas pelo usuário. Automação do Windows continua fora do MVP.
 - Chamadas em nuvem ficam desativadas por padrão e exigem configuração explícita de credenciais.
 
 O pipeline de voz, `sqlite-vec`, integração Roblox/Blender e demais componentes avançados pertencem às fases posteriores do relatório; não são necessários para iniciar o núcleo textual.
@@ -41,7 +42,7 @@ Deixe esse terminal aberto enquanto usa o projeto. Em outro terminal:
 python -m noite
 ```
 
-Para usar a interface de terminal, execute python -m noite --cli. Para instalar o cliente MCP experimental, use python -m pip install -e ".[mcp]" e consulte docs/MCP_STATUS.md. O cliente MCP não é chamado automaticamente pelo modelo.
+Para usar a interface de terminal, execute `python -m noite --cli`. Para ativar o painel MCP, instale `python -m pip install -e ".[mcp]"` e consulte [docs/MCP_STATUS.md](docs/MCP_STATUS.md). O modelo não escolhe nem chama ferramentas MCP; o usuário configura servidores locais e aprova cada execução na interface.
 
 ## Papéis do projeto
 

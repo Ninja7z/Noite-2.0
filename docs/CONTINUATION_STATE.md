@@ -7,6 +7,8 @@ Construir uma assistente desktop local-first funcional sem executar ações arbi
 ## Concluído nesta etapa
 
 - Interface desktop PySide6 com chat, Enter/Shift+Enter, seleção de modelo por sessão, estado Ollama, histórico e worker em thread.
+- Respostas do Ollama aparecem em streaming por chunks; o botão Cancelar cancela a tarefa assíncrona em execução e o texto parcial permanece no histórico SQLite.
+- Handlers dos sinais são conectados antes de iniciar QThread; teste de regressão simula uma tarefa que completa imediatamente.
 - Serviço de conversa com respostas determinísticas de saudação, despedida, ajuda, hora, data, status e identidade.
 - Conversa livre conectada ao gateway Ollama e contexto limitado às 12 mensagens recentes.
 - Geração real pelo gateway e pelo serviço de conversa confirmada com qwen2.5:3b; a geração fria inicial levou cerca de 131 s.
@@ -20,10 +22,10 @@ Construir uma assistente desktop local-first funcional sem executar ações arbi
 
 ## Validação executada
 
-- pytest -q: 30 testes passaram, incluindo fechamento durante tarefa ativa, negação sem aprovação MCP e chamada aprovada com allowlist unitária.
+- pytest -q: 35 testes passaram, incluindo ciclo de vida/cancelamento, streaming do gateway, persistência de resposta parcial e aprovação MCP.
 - ruff check .: passou.
-- GUI: janela real inspecionada no Windows; status exibiu Ollama conectado e o painel MCP foi conferido visualmente. Testes offscreen cobrem o ciclo de fechamento e aprovação.
-- CI: no commit `f825ab4`, Ruff, pytest e o smoke test do CLI passaram em Ubuntu e Windows pelo GitHub Actions.
+- GUI: janela real inspecionada no Windows; status exibiu Ollama conectado. Streaming do Ollama foi observado e cancelado na interface; encerramento ocorreu e resposta parcial foi confirmada no SQLite temporário. Testes offscreen cobrem conexão de sinais, fechamento e cancelamento.
+- CI: no commit `3b78913`, Ruff, pytest e smoke test do CLI passaram em Ubuntu e Windows pelo GitHub Actions. A nova implementação de streaming/cancelamento ainda aguarda CI após push.
 - CLI: validado em etapa anterior, permanece acessível com `python -m noite --cli`.
 - Chamada Ollama real: gateway respondeu OK após elevar o timeout configurável para 180 s.
 
@@ -31,9 +33,8 @@ Construir uma assistente desktop local-first funcional sem executar ações arbi
 
 - MCP está disponível no painel da UI com confirmação por chamada; não é invocado automaticamente pelo modelo. Revisão de permissões e resultados de servidores de terceiros permanece uma decisão consciente do usuário.
 - Abertura de aplicativo continua indisponível; pesquisa lista nomes somente no workspace configurado.
-- Não há streaming nem botão de cancelamento de geração.
 - Revisar teste de carregamento .env: verifica URL configurada; override de modelo por dotenv não está coberto.
-- Streaming e cancelamento de geração ainda não existem; fechar a janela espera a tarefa atual concluir (timeout do modelo configurado até 180 s).
+- O cancelamento interrompe o fluxo assíncrono da chamada LiteLLM/Ollama; testes reais cobriram a UI e persistência parcial neste equipamento. Outros provedores/modelos devem ser conferidos ao serem adicionados.
 
 ## Execução
 
@@ -52,4 +53,4 @@ Construir uma assistente desktop local-first funcional sem executar ações arbi
 
 ## Próxima ação
 
-Executar validação final, publicar atualização no PR draft e conferir o status do CI. Implementar streaming e cancelamento em uma etapa posterior.
+Publicar a atualização de streaming/cancelamento no PR draft, conferir o CI e deixar o PR aberto para revisão. Nenhum merge está autorizado.

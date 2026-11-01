@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
@@ -51,7 +53,12 @@ class AssistantService:
             return "Sou a Noite 2.0, uma assistente local em português."
         return None
 
-    async def respond(self, text: str, conversation_id: str = "default") -> str:
+    async def respond(
+        self,
+        text: str,
+        conversation_id: str = "default",
+        on_chunk: Callable[[str], None] | None = None,
+    ) -> str:
         intent = route(text)
         quick = self.quick_response(intent.normalized_text)
         if quick is not None:
@@ -91,7 +98,29 @@ class AssistantService:
             },
             *[{"role": role, "content": content} for role, content in history],
         ]
-        answer = await ask_local_model(intent.normalized_text, messages=messages, model=self.model)
+        partial: list[str] = []
+
+        def collect_chunk(chunk: str) -> None:
+            partial.append(chunk)
+            if on_chunk is not None:
+                on_chunk(chunk)
+
+        try:
+            if on_chunk is None:
+                answer = await ask_local_model(
+                    intent.normalized_text, messages=messages, model=self.model
+                )
+            else:
+                answer = await ask_local_model(
+                    intent.normalized_text,
+                    messages=messages,
+                    model=self.model,
+                    on_chunk=collect_chunk,
+                )
+        except asyncio.CancelledError:
+            if partial:
+                self._save(conversation_id, "assistant", "".join(partial))
+            raise
         self._save(conversation_id, "assistant", answer)
         return answer
 
