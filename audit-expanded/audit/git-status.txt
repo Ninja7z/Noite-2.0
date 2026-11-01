@@ -1,0 +1,7 @@
+## codex/stabilize-core
+ M src/noite/assistant.py
+ M src/noite/store.py
+ M src/noite/workspace.py
+ M tests/test_assistant.py
+ M tests/test_store.py
+ M tests/test_workspace.py
