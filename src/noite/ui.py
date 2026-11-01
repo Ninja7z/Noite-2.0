@@ -81,7 +81,7 @@ class TaskThread(QThread):
         except asyncio.CancelledError:
             self.cancelled.emit()
         except Exception as exc:
-            logger.error("Background operation failed (%s)", type(exc).__name__)
+            logger.exception("Background operation failed (%s)", type(exc).__name__)
             log_path = next(
                 (
                     handler.baseFilename
