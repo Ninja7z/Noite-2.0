@@ -25,7 +25,7 @@ Construir uma assistente desktop local-first funcional sem executar ações arbi
 - pytest -q: 35 testes passaram, incluindo ciclo de vida/cancelamento, streaming do gateway, persistência de resposta parcial e aprovação MCP.
 - ruff check .: passou.
 - GUI: janela real inspecionada no Windows; status exibiu Ollama conectado. Streaming do Ollama foi observado e cancelado na interface; encerramento ocorreu e resposta parcial foi confirmada no SQLite temporário. Testes offscreen cobrem conexão de sinais, fechamento e cancelamento.
-- CI: no commit `3b78913`, Ruff, pytest e smoke test do CLI passaram em Ubuntu e Windows pelo GitHub Actions. A nova implementação de streaming/cancelamento ainda aguarda CI após push.
+- CI: no commit `2739d3a`, Ruff, os 35 testes e o smoke test do CLI passaram em Ubuntu e Windows pelo GitHub Actions.
 - CLI: validado em etapa anterior, permanece acessível com `python -m noite --cli`.
 - Chamada Ollama real: gateway respondeu OK após elevar o timeout configurável para 180 s.
 
@@ -53,4 +53,4 @@ Construir uma assistente desktop local-first funcional sem executar ações arbi
 
 ## Próxima ação
 
-Publicar a atualização de streaming/cancelamento no PR draft, conferir o CI e deixar o PR aberto para revisão. Nenhum merge está autorizado.
+Streaming e cancelamento estão publicados no PR draft e passaram no CI em Ubuntu e Windows. Manter o PR aberto para revisão; nenhum merge está autorizado.
