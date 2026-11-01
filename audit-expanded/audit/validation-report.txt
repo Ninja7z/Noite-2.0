@@ -1,0 +1,8 @@
+Noite 2.0 local audit snapshot
+
+Branch: codex/stabilize-core
+HEAD: 0b9ca3a7ce10e79f9cb8f39596d860da4e505e3b
+Working tree: six modified tracked files; no untracked files observed. All are unstaged.
+Validation reported in this task: pytest 118 passed, 0 failed, 1 skipped; Ruff passed; git diff --check passed. CI was not run.
+Local Python interpreters installed: 3.14 and 3.13. Tests used the project .venv; its interpreter was not re-probed for this snapshot.
+.env, .venv, .git, SQLite databases, caches, and logs are excluded.
