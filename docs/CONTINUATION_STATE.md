@@ -23,7 +23,7 @@ Construir uma assistente desktop local-first funcional sem executar ações arbi
 - pytest -q: 30 testes passaram, incluindo fechamento durante tarefa ativa, negação sem aprovação MCP e chamada aprovada com allowlist unitária.
 - ruff check .: passou.
 - GUI: janela real inspecionada no Windows; status exibiu Ollama conectado e o painel MCP foi conferido visualmente. Testes offscreen cobrem o ciclo de fechamento e aprovação.
-- CI: workflow adicionado para Ruff, pytest e CLI em Ubuntu e Windows. Execuções remotas dependem do push da atualização; nenhum resultado de CI foi alegado antes disso.
+- CI: no commit `f825ab4`, Ruff, pytest e o smoke test do CLI passaram em Ubuntu e Windows pelo GitHub Actions.
 - CLI: validado em etapa anterior, permanece acessível com `python -m noite --cli`.
 - Chamada Ollama real: gateway respondeu OK após elevar o timeout configurável para 180 s.
 
@@ -32,7 +32,6 @@ Construir uma assistente desktop local-first funcional sem executar ações arbi
 - MCP está disponível no painel da UI com confirmação por chamada; não é invocado automaticamente pelo modelo. Revisão de permissões e resultados de servidores de terceiros permanece uma decisão consciente do usuário.
 - Abertura de aplicativo continua indisponível; pesquisa lista nomes somente no workspace configurado.
 - Não há streaming nem botão de cancelamento de geração.
-- A interface MCP ainda não permite configurar/inspecionar servidores; a biblioteca de cliente é funcional e testada por stdio.
 - Revisar teste de carregamento .env: verifica URL configurada; override de modelo por dotenv não está coberto.
 - Streaming e cancelamento de geração ainda não existem; fechar a janela espera a tarefa atual concluir (timeout do modelo configurado até 180 s).
 
