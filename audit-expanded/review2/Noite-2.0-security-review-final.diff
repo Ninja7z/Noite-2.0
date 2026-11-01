@@ -1,0 +1,471 @@
+diff --git a/src/noite/workspace.py b/src/noite/workspace.py
+index cc280cb..9bdf195 100644
+--- a/src/noite/workspace.py
++++ b/src/noite/workspace.py
+@@ -7,6 +7,7 @@ import tempfile
+ from collections.abc import Callable
+ from dataclasses import dataclass
+ from pathlib import Path
++from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+ 
+ MAX_TEXT_FILE_BYTES = 1_000_000
+ MAX_SEARCH_FILES = 5_000
+@@ -30,13 +31,28 @@ BLOCKED_NAMES = {
+ BLOCKED_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
+ BLOCKED_DIRECTORIES = {".ssh", ".aws", ".azure", ".gnupg"}
+ _SECRET_VALUE = re.compile(
+-    r"(?i)\b(api[_-]?key|access[_-]?token|password|secret)\b"
+-    r"(\s*[:=]\s*)([\"']?)[A-Za-z0-9_./+=:-]{8,}([\"']?)"
++    r"(?im)(\b[A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|TOKEN|SECRET|PASSWORD|CREDENTIALS?)[A-Z0-9_]*"
++    r"\s*[:=]\s*)([\"']?)([^\s\"'`;,]+)([\"']?)"
+ )
++_BEARER_VALUE = re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+")
++_BASIC_VALUE = re.compile(r"(?i)(\bBasic\s+)[A-Za-z0-9+/=_-]+")
++_PRIVATE_KEY_BLOCK = re.compile(
++    r"-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----.*?-----END \1-----",
++    re.DOTALL | re.IGNORECASE,
++)
++_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s\"'<>]+", re.IGNORECASE)
++_SENSITIVE_NAME = re.compile(
++    r"(?i)(?:^|[_-])(?:secret|token|password|passwd|credential|api[_-]?key|private[_-]?key|client[_-]?secret)(?:$|[_-])"
++)
++_ASSIGNMENT = re.compile(r"(?im)^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*[:=]\s*(.*)$")
+ _KNOWN_TOKEN = re.compile(
+     r"(?:sk-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|"
+     r"xox[baprs]-[A-Za-z0-9-]{12,}|AKIA[A-Z0-9]{16})"
+ )
++_QUOTED_SECRET = re.compile(
++    r"(?i)\b([A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|TOKEN|SECRET|PASSWORD|"
++    r"CREDENTIALS?)[A-Z0-9_]*)\b\s*[:=]\s*(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')"
++)
+ 
+ 
+ @dataclass(frozen=True)
+@@ -203,18 +219,22 @@ def search_workspace_text(
+     folded_needle = needle.casefold()
+     for current, directories, filenames in os.walk(root, followlinks=False):
+         current_path = Path(current)
++        if not _is_within_workspace(current_path, root):
++            directories.clear()
++            continue
+         directories[:] = [
+             name
+             for name in directories
+             if name.casefold() not in ignored
+             and not _is_sensitive(current_path / name)
+             and not (current_path / name).is_symlink()
++            and _is_within_workspace(current_path / name, root)
+         ]
+         for filename in filenames:
+             if cancelled():
+                 return matches
+             path = current_path / filename
+-            if _is_sensitive(path) or path.is_symlink():
++            if _is_sensitive(path) or path.is_symlink() or not _is_within_workspace(path, root):
+                 continue
+             try:
+                 size = path.stat().st_size
+@@ -299,12 +319,16 @@ def retrieve_workspace_context(
+         scanned_files = 0
+         for current, directories, filenames in os.walk(root, followlinks=False):
+             current_path = Path(current)
++            if not _is_within_workspace(current_path, root):
++                directories.clear()
++                continue
+             directories[:] = [
+                 name
+                 for name in directories
+                 if name.casefold() not in ignored
+                 and not _is_sensitive(current_path / name)
+                 and not (current_path / name).is_symlink()
++                and _is_within_workspace(current_path / name, root)
+                 and not (
+                     hasattr(current_path / name, "is_junction")
+                     and (current_path / name).is_junction()
+@@ -312,7 +336,12 @@ def retrieve_workspace_context(
+             ]
+             for filename in filenames:
+                 path = current_path / filename
+-                if path in seen or _is_sensitive(path) or path.is_symlink():
++                if (
++                    path in seen
++                    or _is_sensitive(path)
++                    or path.is_symlink()
++                    or not _is_within_workspace(path, root)
++                ):
+                     continue
+                 if hasattr(path, "is_junction") and path.is_junction():
+                     continue
+@@ -353,10 +382,70 @@ def retrieve_workspace_context(
+ 
+ 
+ def _redact_secret_values(text: str) -> str:
+-    text = _SECRET_VALUE.sub(r"\1\2\3[REDACTED]\4", text)
++    text = _PRIVATE_KEY_BLOCK.sub("[REDACTED PRIVATE KEY]", text)
++    text = _URL.sub(_redact_url, text)
++    text = _QUOTED_SECRET.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
++    text = _SECRET_VALUE.sub(r"\1\2[REDACTED]\4", text)
++    text = _BEARER_VALUE.sub(r"\1[REDACTED]", text)
++    text = _BASIC_VALUE.sub(r"\1[REDACTED]", text)
++    text = _redact_sensitive_assignments(text)
+     return _KNOWN_TOKEN.sub("[REDACTED]", text)
+ 
+ 
++def _redact_url(match: re.Match[str]) -> str:
++    raw = match.group(0)
++    try:
++        parts = urlsplit(raw)
++        netloc = parts.netloc
++        userinfo, separator, _host = parts.netloc.rpartition("@")
++        has_password_delimiter = separator and ":" in userinfo
++        known_secret_user = bool(_KNOWN_TOKEN.search(parts.username or ""))
++        if has_password_delimiter or known_secret_user:
++            # Preserve the raw host/port segment. Accessing parts.port can raise
++            # ValueError for malformed ports; that must never return raw userinfo.
++            host_and_port = parts.netloc.rpartition("@")[2]
++            netloc = f"[REDACTED]@{host_and_port}"
++        query = urlencode(
++            [
++                (key, "[REDACTED]" if _is_sensitive_query_key(key) else value)
++                for key, value in parse_qsl(parts.query, keep_blank_values=True)
++            ]
++        )
++        return urlunsplit((parts.scheme, netloc, parts.path, query, parts.fragment))
++    except ValueError:
++        return raw
++
++
++def _is_sensitive_query_key(key: str) -> bool:
++    return bool(_SENSITIVE_NAME.search(key)) or key.casefold() in {"password", "passwd", "token"}
++
++
++def _redact_sensitive_assignments(text: str) -> str:
++    lines = []
++    for line in text.splitlines(keepends=True):
++        match = _ASSIGNMENT.match(line)
++        explicit_client_id = bool(
++            match
++            and re.search(r"(?i)\bCLIENT[_-]?ID\b", match.group(1))
++            and re.search(r"(?i)\bcredential\b", line)
++        )
++        if match and (_SENSITIVE_NAME.search(match.group(1)) or explicit_client_id):
++            value_start, value_end = match.span(2)
++            value = line[value_start:value_end]
++            quote = value[:1] if value[:1] in {"'", '"'} else ""
++            closing = quote if quote and value.endswith(quote) else ""
++            line = line[:value_start] + quote + "[REDACTED]" + closing + line[value_end:]
++        lines.append(line)
++    return "".join(lines)
++
++
++def _is_within_workspace(path: Path, root: Path) -> bool:
++    try:
++        return path.resolve(strict=False).is_relative_to(root)
++    except (OSError, ValueError):
++        return False
++
++
+ def _format_project_context(files: list[tuple[str, str]], budget: int) -> str:
+     parts: list[str] = []
+     remaining = budget
+diff --git a/tests/test_assistant.py b/tests/test_assistant.py
+index 7ace891..958775d 100644
+--- a/tests/test_assistant.py
++++ b/tests/test_assistant.py
+@@ -108,7 +108,7 @@ def test_search_intent_uses_only_the_configured_workspace(tmp_path) -> None:
+ def test_chat_uses_mocked_local_model_and_history(tmp_path, monkeypatch) -> None:
+     from noite import assistant as assistant_module
+ 
+-    settings = Settings(_env_file=None, data_dir=tmp_path)
++    settings = Settings(_env_file=None, data_dir=tmp_path, off_grid=True)
+     assistant = AssistantService(settings)
+     captured = {}
+ 
+@@ -125,6 +125,66 @@ def test_chat_uses_mocked_local_model_and_history(tmp_path, monkeypatch) -> None
+     assert captured["model"] == settings.local_model
+ 
+ 
++def test_history_credentials_are_redacted_at_model_boundary_but_preserved_in_sqlite(
++    tmp_path, monkeypatch
++):
++    from noite import assistant as assistant_module
++    from noite.store import add_message
++
++    assistant = AssistantService(Settings(_env_file=None, data_dir=tmp_path))
++    secret = "synthetic-history-secret-unique-73921"
++    current_secret = "synthetic-current-input-key-28491"
++    with open_database(assistant.database_path) as connection:
++        add_message(connection, "user", f"DATABASE_URL=postgres://user:{secret}@db/app")
++        add_message(connection, "assistant", f"Earlier token: {secret}")
++        original_rows = connection.execute(
++            "SELECT id, created_at, role, content FROM messages ORDER BY id"
++        ).fetchall()
++    captured = {}
++
++    async def fake_model(prompt, *, messages=None, model=None):
++        captured["prompt"] = prompt
++        captured["messages"] = messages
++        return "ok"
++
++    monkeypatch.setattr(assistant_module, "ask_local_model", fake_model)
++    project_root = tmp_path / "project"
++    project_root.mkdir()
++    (project_root / "database_settings.py").write_text(
++        'DATABASE_URL="postgres://db/app?password=synthetic-project-password"\n',
++        encoding="utf-8",
++    )
++    asyncio.run(
++        assistant.respond(
++            f"explique banco dados API_KEY={current_secret}",
++            project_root=project_root,
++            active_file="database_settings.py",
++            active_text=(project_root / "database_settings.py").read_text(encoding="utf-8"),
++        )
++    )
++
++    assert all(secret not in message["content"] for message in captured["messages"])
++    assert all(current_secret not in message["content"] for message in captured["messages"])
++    assert current_secret not in captured["prompt"]
++    assert all(
++        "synthetic-project-password" not in message["content"]
++        for message in captured["messages"]
++    )
++    project_context = next(
++        message["content"]
++        for message in captured["messages"]
++        if "database_settings.py" in message["content"]
++    )
++    assert "synthetic-project-password" not in project_context
++    assert "[REDACTED]" in project_context
++    with open_database(assistant.database_path) as connection:
++        after_rows = connection.execute(
++            "SELECT id, created_at, role, content FROM messages ORDER BY id"
++        ).fetchall()
++    assert after_rows[: len(original_rows)] == original_rows
++    assert secret in "\n".join(row[3] for row in original_rows)
++
++
+ def test_chat_adds_selective_project_context_as_untrusted_local_data(tmp_path, monkeypatch):
+     from noite import assistant as assistant_module
+ 
+diff --git a/tests/test_workspace.py b/tests/test_workspace.py
+index ae88308..39a82d2 100644
+--- a/tests/test_workspace.py
++++ b/tests/test_workspace.py
+@@ -131,6 +131,216 @@ def test_project_context_selects_relevant_files_and_excludes_secrets(tmp_path):
+     assert len(context) <= 5_000
+ 
+ 
++def test_project_context_redacts_provider_secrets_and_bearer_tokens(tmp_path):
++    source = tmp_path / "settings.py"
++    secret = "synthetic-review-secret-value-123"
++    source.write_text(
++        f'AWS_SECRET_ACCESS_KEY = "{secret}"\n'
++        'GITLAB_TOKEN=abc1234\n'
++        'Authorization: Bearer synthetic-bearer-value-123\n',
++        encoding="utf-8",
++    )
++
++    context = retrieve_workspace_context(tmp_path, "AWS_SECRET_ACCESS_KEY GITLAB_TOKEN")
++
++    assert secret not in context
++    assert "abc1234" not in context
++    assert "synthetic-bearer-value-123" not in context
++    bearer_context = retrieve_workspace_context(tmp_path, "Authorization Bearer")
++    assert "synthetic-bearer-value-123" not in bearer_context
++    assert "[REDACTED]" in bearer_context
++    assert context.count("[REDACTED]") >= 2
++
++
++@pytest.mark.parametrize(
++    ("filename", "content", "query", "secret"),
++    [
++        (
++            "database_url.txt",
++            "DATABASE_URL=postgres://user:synthetic-db-pass@db/one",
++            "database url",
++            "synthetic-db-pass",
++        ),
++        (
++            "private_key.txt",
++            "PRIVATE_KEY=synthetic-private-key-material",
++            "private key",
++            "synthetic-private-key-material",
++        ),
++        (
++            "client_secret.txt",
++            "CLIENT_SECRET='synthetic-client-secret-value'",
++            "client secret",
++            "synthetic-client-secret-value",
++        ),
++        (
++            "aws_secret.txt",
++            "AWS_SECRET_ACCESS_KEY=synthetic-aws-access-key",
++            "aws secret access",
++            "synthetic-aws-access-key",
++        ),
++        (
++            "gitlab_token.txt",
++            "GITLAB_TOKEN=synthetic-gitlab-token",
++            "gitlab token",
++            "synthetic-gitlab-token",
++        ),
++        (
++            "api_key.txt",
++            'API_KEY="synthetic-api-key-value"',
++            "api key",
++            "synthetic-api-key-value",
++        ),
++        (
++            "authorization.txt",
++            "Authorization: Bearer synthetic-bearer-token",
++            "authorization bearer",
++            "synthetic-bearer-token",
++        ),
++        (
++            "pem_key.txt",
++            "-----BEGIN PRIVATE KEY-----\nsynthetic-pem-material\n-----END PRIVATE KEY-----",
++            "private key",
++            "synthetic-pem-material",
++        ),
++        (
++            "encrypted_key.txt",
++            "-----BEGIN ENCRYPTED PRIVATE KEY-----\n"
++            "synthetic-encrypted-key\n"
++            "-----END ENCRYPTED PRIVATE KEY-----",
++            "encrypted private key",
++            "synthetic-encrypted-key",
++        ),
++        (
++            "rsa_key.txt",
++            "-----BEGIN RSA PRIVATE KEY-----\nsynthetic-rsa-key\n-----END RSA PRIVATE KEY-----",
++            "rsa private key",
++            "synthetic-rsa-key",
++        ),
++        (
++            "dsa_key.txt",
++            "-----BEGIN DSA PRIVATE KEY-----\nsynthetic-dsa-key\n-----END DSA PRIVATE KEY-----",
++            "dsa private key",
++            "synthetic-dsa-key",
++        ),
++        (
++            "basic_auth.txt",
++            "Authorization: Basic c3ludGhldGljLWJhc2ljLWNyZWRlbnRpYWw=",
++            "authorization basic",
++            "c3ludGhldGljLWJhc2ljLWNyZWRlbnRpYWw=",
++        ),
++        (
++            "query_password.txt",
++            "DATABASE_URL=postgres://db/app?password=synthetic-query-password&sslmode=require",
++            "database url",
++            "synthetic-query-password",
++        ),
++        (
++            "query_token.txt",
++            "DATABASE_URL=postgres://db/app?token=synthetic-query-token&application_name=noite",
++            "database url",
++            "synthetic-query-token",
++        ),
++        (
++            "client_id.txt",
++            "CLIENT_ID=synthetic-client-id-secret # credential",
++            "client id credential",
++            "synthetic-client-id-secret",
++        ),
++    ],
++)
++def test_context_redacts_common_credential_formats(tmp_path, filename, content, query, secret):
++    (tmp_path / filename).write_text(content, encoding="utf-8")
++    context = retrieve_workspace_context(tmp_path, query)
++    assert secret not in context
++
++
++def test_redaction_preserves_public_config_urls_and_non_sensitive_suffixes(tmp_path):
++    source = tmp_path / "public_config.txt"
++    source.write_text(
++        "PUBLIC_URL=https://example.test/path?theme=dark&lang=pt\n"
++        "CLIENT_ID=public-application-id\n"
++        "PORT=8080 # keep this comment\n"
++        "FEATURE_FLAG=true\n",
++        encoding="utf-8",
++    )
++    context = retrieve_workspace_context(
++        tmp_path, "public config url client id port feature flag"
++    )
++    assert "https://example.test/path?theme=dark&lang=pt" in context
++    assert "public-application-id" in context
++    assert "# keep this comment" in context
++    assert "FEATURE_FLAG=true" in context
++
++
++def test_redaction_preserves_non_sensitive_url_userinfo(tmp_path):
++    source = tmp_path / "url_notes.txt"
++    source.write_text(
++        "https://label@example.test/path?theme=dark&lang=pt\n",
++        encoding="utf-8",
++    )
++    context = retrieve_workspace_context(tmp_path, "url notes theme")
++    assert "https://label@example.test/path?theme=dark&lang=pt" in context
++
++
++@pytest.mark.parametrize(
++    ("content", "secret"),
++    [
++        (
++            'Authorization: password="synthetic password with many words"',
++            "synthetic password with many words",
++        ),
++        (
++            'prefix text. password="synthetic inline secret phrase". suffix text',
++            "synthetic inline secret phrase",
++        ),
++    ],
++)
++def test_redacts_quoted_credentials_with_spaces_inside_larger_text(tmp_path, content, secret):
++    source = tmp_path / "authorization_notes.txt"
++    source.write_text(content, encoding="utf-8")
++    context = retrieve_workspace_context(tmp_path, "authorization password prefix suffix")
++    assert secret not in context
++
++
++def test_url_redacts_userinfo_with_password_but_preserves_public_username(tmp_path):
++    source = tmp_path / "url_notes.txt"
++    source.write_text(
++        "https://public-label@safe.example/path\n"
++        "https://name:synthetic-url-password@db.example:5432/app?sslmode=require\n",
++        encoding="utf-8",
++    )
++    context = retrieve_workspace_context(tmp_path, "url credentials public label sslmode")
++    assert "public-label@safe.example" in context
++    assert "synthetic-url-password" not in context
++    assert "db.example:5432/app?sslmode=require" in context
++
++
++def test_url_with_invalid_port_still_redacts_userinfo(tmp_path):
++    source = tmp_path / "database_url_notes.txt"
++    source.write_text(
++        "https://usuario:synthetic-invalid-port-password@servidor:porta-invalida/banco",
++        encoding="utf-8",
++    )
++    context = retrieve_workspace_context(tmp_path, "database url banco servidor")
++    assert "synthetic-invalid-port-password" not in context
++    assert "[REDACTED]@servidor:porta-invalida/banco" in context
++
++
++def test_workspace_search_and_context_do_not_follow_external_directory_symlink(tmp_path):
++    external = tmp_path.parent / f"{tmp_path.name}-external"
++    external.mkdir()
++    (external / "outside.py").write_text("needle external_secret_123456", encoding="utf-8")
++    link = tmp_path / "linked"
++    try:
++        link.symlink_to(external, target_is_directory=True)
++    except (OSError, NotImplementedError):
++        pytest.skip("Directory symlinks unavailable")
++
++    assert search_workspace_text(tmp_path, "needle") == []
++    assert "external_secret_123456" not in retrieve_workspace_context(tmp_path, "needle")
++
++
+ def test_create_file_and_directory_without_overwriting(tmp_path):
+     created_file = create_workspace_file(tmp_path, "notes.txt")
+     created_directory = create_workspace_directory(tmp_path, "notes")
