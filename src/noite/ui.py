@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -120,87 +121,241 @@ class NoiteWindow(QMainWindow):
         self._streaming_response_active = False
         self._streaming_response_text = ""
         self.setWindowTitle("Noite 2.0")
-        self.resize(900, 680)
+        self.setMinimumSize(920, 620)
+        self.resize(1160, 720)
         self._build_ui()
         self._load_history()
         self._check_status()
 
     def _build_ui(self) -> None:
         root = QWidget()
-        layout = QVBoxLayout(root)
-        layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(14)
+        root.setObjectName("appRoot")
+        shell = QHBoxLayout(root)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSpacing(0)
+
+        rail = QFrame()
+        rail.setObjectName("iconRail")
+        rail.setFixedWidth(54)
+        rail_layout = QVBoxLayout(rail)
+        rail_layout.setContentsMargins(8, 14, 8, 14)
+        rail_layout.setSpacing(16)
+        mark = QLabel("N")
+        mark.setObjectName("brandMark")
+        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mark.setFixedSize(38, 38)
+        rail_layout.addWidget(mark)
+        rail_layout.addWidget(self._rail_glyph("⌂", "Noite 2.0"))
+        rail_layout.addWidget(self._rail_glyph("◷", "Conversa local"))
+        rail_layout.addStretch(1)
+        rail_layout.addWidget(self._rail_glyph("···", "Ferramentas MCP"))
+        shell.addWidget(rail)
+
+        sidebar = QFrame()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(270)
+        side_layout = QVBoxLayout(sidebar)
+        side_layout.setContentsMargins(16, 20, 16, 16)
+        side_layout.setSpacing(10)
+        side_title = QLabel("Noite 2.0")
+        side_title.setObjectName("sideTitle")
+        side_layout.addWidget(side_title)
+        side_layout.addSpacing(16)
+        self._side_section(side_layout, "PROJETO")
+        project = QLabel("▱   Noite 2.0")
+        project.setObjectName("projectTile")
+        project.setMinimumHeight(40)
+        side_layout.addWidget(project)
+        self._side_section(side_layout, "CONVERSAS")
+        conversation = QLabel("◦   Conversa local")
+        conversation.setObjectName("conversationTile")
+        conversation.setMinimumHeight(36)
+        side_layout.addWidget(conversation)
+        self._side_section(side_layout, "FERRAMENTAS")
+        self.mcp_button = QPushButton("◇   Ferramentas MCP")
+        self.mcp_button.setObjectName("sideButton")
+        self.mcp_button.setMinimumHeight(38)
+        self.mcp_button.setToolTip("Configurar e aprovar chamadas MCP")
+        self.mcp_button.clicked.connect(self._open_mcp_dialog)
+        side_layout.addWidget(self.mcp_button)
+        side_layout.addStretch(1)
+        local_note = QLabel("Local-first\nConversas salvas neste computador")
+        local_note.setObjectName("sideNote")
+        local_note.setWordWrap(True)
+        side_layout.addWidget(local_note)
+        shell.addWidget(sidebar)
+
+        main = QWidget()
+        main.setObjectName("mainPane")
+        layout = QVBoxLayout(main)
+        layout.setContentsMargins(28, 20, 28, 18)
+        layout.setSpacing(12)
 
         header = QHBoxLayout()
-        title = QLabel("Noite")
+        title = QLabel("Noite 2.0")
         title.setObjectName("title")
         self.status_label = QLabel("Verificando Ollama…")
         self.status_label.setObjectName("status")
         header.addWidget(title)
         header.addStretch(1)
-        header.addWidget(QLabel("Modelo"))
+        model_label = QLabel("Modelo")
+        model_label.setObjectName("muted")
+        header.addWidget(model_label)
         self.model_box = QComboBox()
         self.model_box.setEditable(True)
         self.model_box.addItem(self.settings.local_model)
-        self.model_box.setMinimumWidth(180)
+        self.model_box.setMinimumWidth(172)
         self.model_box.setToolTip("Modelo usado nesta sessão")
         header.addWidget(self.model_box)
         header.addWidget(self.status_label)
-        self.mcp_button = QPushButton("Ferramentas MCP")
-        self.mcp_button.clicked.connect(self._open_mcp_dialog)
-        header.addWidget(self.mcp_button)
         layout.addLayout(header)
+
+        self.welcome = QFrame()
+        self.welcome.setObjectName("welcome")
+        welcome_layout = QVBoxLayout(self.welcome)
+        welcome_layout.setContentsMargins(20, 32, 20, 32)
+        welcome_layout.setSpacing(12)
+        welcome_layout.addStretch(1)
+        welcome_mark = QLabel("☾")
+        welcome_mark.setObjectName("welcomeMark")
+        welcome_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        welcome_layout.addWidget(welcome_mark)
+        welcome_title = QLabel("O que vamos fazer em Noite 2.0?")
+        welcome_title.setObjectName("welcomeTitle")
+        welcome_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        welcome_layout.addWidget(welcome_title)
+        welcome_hint = QLabel("Seu assistente local está pronto. Escreva para começar.")
+        welcome_hint.setObjectName("welcomeHint")
+        welcome_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        welcome_layout.addWidget(welcome_hint)
+        welcome_layout.addStretch(1)
+        layout.addWidget(self.welcome, 1)
 
         self.chat = QTextBrowser()
         self.chat.setOpenExternalLinks(False)
         self.chat.setObjectName("chat")
+        self.chat.hide()
         layout.addWidget(self.chat, 1)
 
+        composer = QFrame()
+        composer.setObjectName("composer")
+        composer_layout = QVBoxLayout(composer)
+        composer_layout.setContentsMargins(14, 10, 14, 10)
+        composer_layout.setSpacing(8)
+        composer_head = QHBoxLayout()
+        composer_project = QLabel("▱   Noite 2.0")
+        composer_project.setObjectName("composerProject")
+        composer_head.addWidget(composer_project)
+        composer_head.addStretch(1)
+        self.progress = QLabel("Pronta")
+        self.progress.setObjectName("progress")
+        composer_head.addWidget(self.progress)
+        composer_layout.addLayout(composer_head)
+
         compose = QHBoxLayout()
+        compose.setSpacing(10)
         self.input = InputBox()
-        self.input.setPlaceholderText(
-            "Converse com a Noite… (Enter envia, Shift+Enter quebra linha)"
-        )
-        self.input.setFixedHeight(86)
+        self.input.setObjectName("input")
+        self.input.setPlaceholderText("Pergunte qualquer coisa à Noite…")
+        self.input.setFixedHeight(74)
         self.input.send_requested.connect(self.send_message)
-        self.send_button = QPushButton("Enviar")
+        self.send_button = QPushButton("↑")
+        self.send_button.setObjectName("sendButton")
+        self.send_button.setAccessibleName("Enviar mensagem")
+        self.send_button.setFixedSize(42, 42)
         self.send_button.setDefault(True)
         self.send_button.clicked.connect(self.send_message)
         self.cancel_button = QPushButton("Cancelar")
+        self.cancel_button.setObjectName("cancelButton")
         self.cancel_button.clicked.connect(self.cancel_generation)
         self.cancel_button.hide()
         compose.addWidget(self.input, 1)
         compose.addWidget(self.send_button)
         compose.addWidget(self.cancel_button)
-        layout.addLayout(compose)
-
-        self.progress = QLabel("Local-first · conversas salvas neste computador")
-        self.progress.setObjectName("progress")
-        layout.addWidget(self.progress)
+        composer_layout.addLayout(compose)
+        layout.addWidget(composer)
+        footer = QLabel(
+            "Enter envia  ·  Shift+Enter quebra linha  ·  Ferramentas MCP exigem aprovação"
+        )
+        footer.setObjectName("footerHint")
+        layout.addWidget(footer)
+        shell.addWidget(main, 1)
         self.setCentralWidget(root)
         self.setStyleSheet(
-            "QMainWindow, QWidget { background: #10131a; color: #e8eaf0; font-size: 14px; }"
-            "QLabel#title { font-size: 25px; font-weight: 700; color: #c8b6ff; }"
-            "QLabel#status, QLabel#progress { color: #a4adbd; }"
-            "QTextBrowser, QPlainTextEdit, QComboBox { background: #191e28; "
-            "border: 1px solid #303849; "
-            "border-radius: 10px; padding: 10px; selection-background-color: #6251a8; }"
-            "QPushButton { background: #8068d8; border: 0; border-radius: 9px; padding: 12px 20px; "
-            "font-weight: 600; } QPushButton:hover { background: #947fea; }"
-            "QPushButton:disabled { background: #424652; color: #b1b5c0; }"
+            "QWidget { background: #171719; color: #ededf0; font-size: 13px; }"
+            "QLabel { background: transparent; }"
+            "QWidget#iconRail { background: #17191d; border-right: 1px solid #2c2d31; }"
+            "QWidget#sidebar { background: #1d1d20; border-right: 1px solid #303035; }"
+            "QWidget#mainPane { background: #171719; }"
+            "QLabel#brandMark { background: #31343a; color: #f4f4f5; border-radius: 11px; "
+            "font-size: 17px; font-weight: 700; }"
+            "QLabel#railGlyph { color: #96979d; font-size: 18px; padding: 6px 0; }"
+            "QLabel#sideTitle { font-size: 19px; font-weight: 650; }"
+            "QLabel#sectionLabel { color: #92939a; font-size: 10px; font-weight: 700; "
+            "padding-top: 14px; letter-spacing: 1px; }"
+            "QLabel#projectTile { background: #303136; border-radius: 8px; padding: 0 10px; "
+            "font-weight: 600; }"
+            "QLabel#conversationTile { color: #c6c6cb; padding: 0 10px; }"
+            "QPushButton#sideButton { background: transparent; color: #c6c6cb; text-align: left; "
+            "border: 0; border-radius: 8px; padding: 0 10px; }"
+            "QPushButton#sideButton:hover { background: #2b2b30; color: white; }"
+            "QLabel#sideNote, QLabel#footerHint, QLabel#muted { color: #92939a; }"
+            "QLabel#sideNote { border-top: 1px solid #303035; padding-top: 12px; font-size: 11px; }"
+            "QLabel#title { font-size: 18px; font-weight: 650; }"
+            "QLabel#status { color: #8ecda9; background: #202a24; border-radius: 11px; "
+            "padding: 6px 10px; font-size: 11px; }"
+            "QLabel#progress { color: #a5a5ac; font-size: 11px; }"
+            "QLabel#welcomeMark { color: #829bc8; font-size: 40px; }"
+            "QLabel#welcomeTitle { color: #f0f0f2; font-size: 28px; font-weight: 500; }"
+            "QLabel#welcomeHint { color: #96969e; font-size: 14px; }"
+            "QFrame#composer { background: #292a2d; border: 1px solid #3a3b40; "
+            "border-radius: 16px; }"
+            "QLabel#composerProject { color: #e4e4e8; font-weight: 600; }"
+            "QTextBrowser { background: transparent; border: 0; padding: 8px 14px; "
+            "selection-background-color: #435f91; }"
+            "QPlainTextEdit#input { background: transparent; border: 0; padding: 8px 4px; "
+            "selection-background-color: #435f91; }"
+            "QComboBox { background: #27282c; border: 1px solid #3a3b40; border-radius: 8px; "
+            "padding: 6px 10px; }"
+            "QPushButton#sendButton { background: #496fa9; color: white; border: 0; "
+            "border-radius: 21px; font-size: 22px; font-weight: 600; }"
+            "QPushButton#sendButton:hover { background: #5b82bd; }"
+            "QPushButton#cancelButton { background: #44454a; border: 0; border-radius: 8px; "
+            "padding: 10px 14px; }"
+            "QPushButton:disabled { background: #414248; color: #a5a5ab; }"
+            "QLabel#footerHint { font-size: 10px; padding-left: 4px; }"
         )
 
+    @staticmethod
+    def _rail_glyph(text: str, accessible_name: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("railGlyph")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setToolTip(accessible_name)
+        label.setFixedHeight(32)
+        return label
+
+    @staticmethod
+    def _side_section(layout: QVBoxLayout, text: str) -> None:
+        label = QLabel(text)
+        label.setObjectName("sectionLabel")
+        layout.addWidget(label)
+
     def _append_message(self, role: str, content: str) -> None:
+        welcome = getattr(self, "welcome", None)
+        if welcome is not None:
+            welcome.hide()
+            self.chat.show()
         safe = html.escape(content).replace("\n", "<br>")
         if role == "user":
             self.chat.append(
-                f'<p style="margin:14px 0 4px"><b style="color:#b6a4ff">Você</b></p>'
-                f'<p style="margin:0 0 12px">{safe}</p>'
+                f'<p style="margin:18px 0 4px"><b style="color:#9bb8eb">Você</b></p>'
+                f'<p style="margin:0 0 12px; color:#e4e4e8">{safe}</p>'
             )
         else:
             self.chat.append(
-                f'<p style="margin:14px 0 4px"><b style="color:#7ddbb3">Noite</b></p>'
-                f'<p style="margin:0 0 12px">{safe}</p>'
+                f'<p style="margin:18px 0 4px"><b style="color:#a8c2ee">Noite</b></p>'
+                f'<p style="margin:0 0 12px; color:#e4e4e8">{safe}</p>'
             )
 
     def _load_history(self) -> None:

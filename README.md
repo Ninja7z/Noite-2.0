@@ -16,10 +16,10 @@ O pipeline de voz, `sqlite-vec`, integração Roblox/Blender e demais componente
 
 ## Ambiente Windows
 
-Requer Python 3.11 ou superior. No computador atual, Python 3.14.7 está instalado.
+Requer Python 3.11 ou superior. O ambiente validado para o app e o lançador nesta máquina usa Python 3.13.16.
 
 ```powershell
-py -3.14 -m venv .venv
+py -3.13 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e ".[desktop,windows,dev]"
@@ -43,6 +43,8 @@ python -m noite
 ```
 
 Para usar a interface de terminal, execute `python -m noite --cli`. Para ativar o painel MCP, instale `python -m pip install -e ".[mcp]"` e consulte [docs/MCP_STATUS.md](docs/MCP_STATUS.md). O modelo não escolhe nem chama ferramentas MCP; o usuário configura servidores locais e aprova cada execução na interface.
+
+O executável local `Noite.exe` pode ser reconstruído com `scripts/build_windows.ps1 -CopyToDesktop`. Ele inicia este checkout pelo ambiente `.venv`; não é um instalador portátil e requer que Python e as dependências já estejam instalados. Consulte [docs/BUILD_WINDOWS.md](docs/BUILD_WINDOWS.md) para os limites do empacotamento Qt.
 
 ## Papéis do projeto
 
