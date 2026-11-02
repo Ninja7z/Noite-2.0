@@ -51,13 +51,23 @@ ollama pull qwen2.5:3b
 ollama serve
 ```
 
-Em outro terminal, inicie a interface real (usa `ServiceClient` e o núcleo da Noite):
+Em outro terminal, inicie a interface principal de mascote flutuante:
 
 ```powershell
 python run_ui.py
 ```
 
-`python run_ui.py --mock` inicia dados fixos apenas para screenshots e testes. O mock não é o modo padrão. Para a CLI, use `python -m noite --cli`.
+O mascote usa `AssistantService` real, mostra o estado do Ollama, acompanha atividades e abre um painel compacto de conversa ao clicar. Arraste o robô para posicioná-lo na tela; a posição é persistida.
+
+A interface PySide6 completa anterior foi isolada como legado, sem apagar o código nem quebrar builds antigos. Para abri-la explicitamente:
+
+```powershell
+python run_ui.py --legacy
+# ou
+python -m noite --legacy-ui
+```
+
+`python run_ui.py --legacy --mock` inicia dados fixos apenas para screenshots e testes da UI antiga. O mock não é o modo padrão. Para a CLI, use `python -m noite --cli`. Consulte `docs/MASCOT_AND_MODELS.md` para a arquitetura do mascote e avaliação Gemma.
 
 ## Ambiente Windows
 

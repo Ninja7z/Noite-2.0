@@ -298,6 +298,7 @@ class AssistantService:
         active_file: str | None = None,
         active_text: str | None = None,
         on_activity: Callable[[ActivityEvent], None] | None = None,
+        history_override: list[tuple[str, str]] | None = None,
     ) -> str:
         intent = route(text)
         quick = self.quick_response(intent.normalized_text)
@@ -369,8 +370,11 @@ class AssistantService:
             self._save_turn(conversation_id, text, answer)
             return answer
 
-        with closing(open_database(self.database_path)) as connection:
-            history = recent_messages(connection, conversation_id, limit=12)
+        if history_override is None:
+            with closing(open_database(self.database_path)) as connection:
+                history = recent_messages(connection, conversation_id, limit=12)
+        else:
+            history = list(history_override)[-12:]
         if history and history[-1][0] == "user":
             history = history[:-1]
         history = _trim_history(history)

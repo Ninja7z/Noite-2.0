@@ -1,25 +1,23 @@
-# Plano de UI — referência Noite 2.0
+# Plano de UI: mascote Noite 2.0
 
-## Tokens amostrados das referências
-- Escuro: fundo `#0A0B15`, superfície `#17162A`, borda `#292346`, texto `#F8F6FE`, secundário `#A3A5AC`, destaque `#4916BD`, sucesso `#18E066`.
-- Claro: fundo `#FAF8FE`, superfície `#F1F1FD`, borda `#E7E4FB`, texto `#121334`, secundário `#6F6E9F`, destaque `#5531EB`, sucesso `#09D15E`.
-- Tipografia: Segoe UI; escala 11/13/16/24/32/46 px; 400 para corpo, 600 para controles, 700 só na saudação.
-- Espaços: 4/8/12/16/24/32; raios: janela 18, cards 14, chips 18, compositor 24; sombra só no compositor.
-- Hierarquia: lua e “Boa noite!” são o único foco memorável; títulos de cards e metadados ficam discretos.
+## Objetivo
+- Substituir a janela de chat como interface padrão por um mascote desktop flutuante.
+- Personagem original em pixel art, inspirado no conceito de robô de mesa branco com visor escuro e olhos azul-ciano do EMO; sem copiar assets/marca.
+- Janela transparente, sem moldura, sempre visível, arrastável para qualquer ponto da tela e com posição persistida.
+- Estado compacto: mascote + indicador de estado.
+- Ao clicar: painel compacto com status Ollama/modelo, atividade recente, resposta/streaming e campo de mensagem.
+- Expressões simples para ocioso, pensando, trabalhando, concluído e erro.
+- Ações de alto risco continuam exigindo aprovação; mascote é observabilidade e entrada, não bypass de segurança.
 
-## Estrutura (larguras relativas)
-```text
-┌ Barra superior — 100%: marca | online | minimizar / maximizar / fechar ┐
-├ Sidebar 17% ───┬ Centro 63% ──────────────────────┬ Direita 20% ──────┤
-│ marca / menu   │ modo e conversa                  │ Destaques          │
-│ sessões        │ lua + saudação                   │ Contexto Atual     │
-│ privacidade    │ compositor + ações               │ Ferramentas        │
-└────────────────┴ rodapé                           ┴───────────────────┘
-```
-- Alinhamento: sidebar e cards à esquerda; saudação, input e ações centralizados; painel direito alinhado à largura da coluna.
-- Responsivo: preservar três regiões até 1000 px; reduzir margens e permitir rolagem nos painéis antes de ocultar conteúdo.
+## Arquitetura
+- Preservar AssistantService, SQLite, gateway, ferramentas e contratos existentes.
+- Nova UI em src/noite/mascot.py; execução padrão via python -m noite e launcher.
+- Interface antiga isolada atrás de --legacy-ui/run_ui.py --legacy; não excluir enquanto launchers antigos dependerem do checkout.
+- Worker Qt separado para chamadas assíncronas; sinais Qt para atualizar o mascote sem bloquear a thread visual.
+- Posição persistida com QSettings; sem serviço de rede adicional.
 
-## Construção e validação
-- Ordem: layout, tipografia/espaços, temas, ícones SVG, fundo decorativo, estados de interação.
-- `theme.json` será fonte única dos tokens; comparar screenshot do app com as referências e corrigir diferenças antes da entrega.
-- `ServiceClient` usa o núcleo real; `MockClient` só alimenta `--mock` para screenshot/teste.
+## Validação
+- Testes de lógica de estado, posição e worker com Qt offscreen.
+- Rodar pytest, Ruff, compileall e git diff --check.
+- Gerar um EXE com nome novo; não sobrescrever nem remover builds anteriores.
+- Verificar visualmente inicialização, arrastar, expandir/recolher, envio e status real do Ollama.

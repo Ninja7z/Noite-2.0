@@ -16,13 +16,21 @@ async def _handle(text: str) -> str:
 
 def main() -> None:
     if "--cli" not in sys.argv[1:]:
+        if "--legacy-ui" in sys.argv[1:]:
+            try:
+                from .ui import run_gui
+            except ImportError as exc:
+                raise SystemExit(
+                    "A interface legada requer PySide6. Instale com: pip install -e '.[desktop]'"
+                ) from exc
+            raise SystemExit(run_gui())
         try:
-            from .ui import run_gui
+            from .mascot import run_mascot
         except ImportError as exc:
             raise SystemExit(
-                "A interface requer PySide6. Instale com: pip install -e '.[desktop]'"
+                "A interface do mascote requer PySide6. Instale com: pip install -e '.[desktop]'"
             ) from exc
-        raise SystemExit(run_gui())
+        raise SystemExit(run_mascot())
 
     settings = get_settings()
     log_path = setup_logging(settings.data_dir)
