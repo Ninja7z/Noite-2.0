@@ -9,9 +9,8 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel, QListWidget
 
-from noite.activity import make_activity_event
 from noite.activity_panel import ContextActivityPanel
 from noite.command_palette import CommandAction, CommandPalette
 
@@ -102,20 +101,8 @@ def test_ctrl_k_opens_palette_in_main_window(app, tmp_path, monkeypatch):
     app.processEvents()
 
 
-def test_activity_panel_shows_real_event_and_expandable_details(app):
+def test_context_panel_has_no_activity_feed(app):
     panel = ContextActivityPanel()
-    event = make_activity_event(
-        "Busca no projeto",
-        "completed",
-        "Pesquisa concluída · 2 resultado(s)",
-        duration_ms=42,
-        details="Projeto: exemplo",
-    )
-    panel.add_event(event)
-
-    assert panel.events.count() == 1
-    assert "Pesquisa concluída" in panel.events.item(0).text()
-    assert not panel.details_toggle.isHidden()
-    panel.details_toggle.setChecked(True)
-    assert not panel.details.isHidden()
-    assert panel.details.text() == "Projeto: exemplo"
+    assert panel.findChild(QListWidget, "activityEvents") is None
+    assert panel.findChild(QLabel, "activityProgress") is None
+    assert panel.findChild(QLabel, "contextPanelTitle") is not None

@@ -103,6 +103,110 @@ def test_streaming_yields_each_text_delta(monkeypatch) -> None:
     assert received == ["Olá", " mundo"]
 
 
+def test_native_ollama_thinking_stream_separates_thinking_from_answer(monkeypatch) -> None:
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def aiter_lines(self):
+            for line in (
+                '{"message":{"thinking":"Vou verificar."}}',
+                '{"message":{"content":"Está correto."}}',
+            ):
+                yield line
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def stream(self, method, url, *, json):
+            captured.update(method=method, url=url, payload=json)
+            return FakeResponse()
+
+    async def supports_thinking(_base_url, _model):
+        return True
+
+    monkeypatch.setattr(model_gateway, "httpx", SimpleNamespace(
+        AsyncClient=FakeClient,
+        TimeoutException=Exception,
+        HTTPError=Exception,
+    ))
+    monkeypatch.setattr(model_gateway, "_model_supports_thinking", supports_thinking)
+    monkeypatch.setattr(
+        model_gateway,
+        "get_settings",
+        lambda: SimpleNamespace(
+            local_model="qwen3:4b",
+            ollama_base_url="http://127.0.0.1:11434",
+            model_timeout_seconds=30,
+        ),
+    )
+    answer_chunks, thought_chunks = [], []
+
+    answer = _run(
+        model_gateway.ask_local_model(
+            "Pergunta",
+            messages=[{"role": "user", "content": "Pergunta"}],
+            on_chunk=answer_chunks.append,
+            on_thinking=thought_chunks.append,
+        )
+    )
+
+    assert captured["url"].endswith("/api/chat")
+    assert captured["payload"]["think"] is True
+    assert captured["payload"]["options"]["num_predict"] == 2048
+    assert answer == "Está correto."
+    assert answer_chunks == ["Está correto."]
+    assert thought_chunks == ["Vou verificar."]
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [([False], False), ([True, False], True), (["low", "high"], True), (None, False)],
+)
+def test_ollama_thinking_detection_uses_advertised_values(monkeypatch, values, expected):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"thinking": {"values": values}} if values is not None else {}
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(model_gateway, "httpx", SimpleNamespace(
+        AsyncClient=FakeClient,
+        HTTPError=Exception,
+    ))
+
+    assert _run(model_gateway._model_supports_thinking("http://ollama", "model")) is expected
+
+
 def test_glm_uses_litellm_and_logs_usage_without_content(monkeypatch, caplog) -> None:
     from noite.config import Settings
 

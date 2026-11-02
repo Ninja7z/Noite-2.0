@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon, QTextCursor
+from PySide6.QtGui import QGuiApplication, QIcon, QTextCursor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -213,28 +213,129 @@ def test_settings_dialog_scrolls_at_compact_size(app, tmp_path, monkeypatch):
     window.close()
 
 
-def test_activity_panel_shows_real_operation_and_elapsed_time(app):
+def test_context_panel_contains_only_reference_cards_and_elides_directory(app):
+    from noite.theme import DARK_THEME
+
     panel = ContextActivityPanel()
-    started = make_activity_event("Chamada ao modelo · qwen2.5:3b", "started", "Consultando modelo")
-    panel.add_event(started)
-
-    assert panel.has_active_operations
-    assert "Consultando modelo" in panel.progress.text()
-    QTest.qWait(1050)
-    assert " s" in panel.progress.text()
-
-    panel.add_event(
-        make_activity_event(
-            started.operation,
-            "completed",
-            "Resposta recebida",
-            duration_ms=1040,
-        )
+    panel.setStyleSheet(DARK_THEME)
+    panel.resize(280, 700)
+    panel.set_reference_context(
+        {
+            "project": "Noite-2.0",
+            "directory": r"C:\Users\example\Documents\workspace\very-long-project-directory",
+            "indexed_documents": 18,
+        }
     )
-    assert not panel.has_active_operations
-    assert "Sem operações" in panel.progress.text()
-    assert panel.events.count() == 2
+    panel.show()
+    app.processEvents()
+
+    visible_text = " ".join(label.text() for label in panel.findChildren(QLabel))
+    assert "Destaques" in visible_text
+    assert "Contexto Atual" in visible_text
+    assert "Ferramentas" in visible_text
+    assert "Atividade" not in visible_text
+    assert "produtividade." in visible_text
+    title = panel.findChild(QLabel, "highlightTitle")
+    assert title is not None
+    assert not panel.highlight_laptop.isVisible()
+    title_lines = title.text().splitlines()
+    assert len(title_lines) == 2
+    assert all(
+        title.fontMetrics().horizontalAdvance(line) <= title.width()
+        for line in title_lines
+    )
+    assert "…" in panel.reference_directory.text()
+    assert "very-long-project-directory" in panel.reference_directory.toolTip()
     panel.deleteLater()
+
+
+def test_chat_messages_have_no_card_background_and_code_has_copy_action():
+    user_html = NoiteWindow._bubble_html("user", "Minha pergunta\n```py\nprint(1)\n```")
+    assistant_html = NoiteWindow._bubble_html("assistant", "```python\nprint(1)\n```")
+
+    assert "Você" in user_html
+    assert "Noite" in assistant_html
+    assert "background" not in user_html.casefold()
+    assert 'href="copy:' in user_html
+    assert 'href="copy:' in assistant_html
+
+
+def test_thinking_panel_shows_only_received_text_and_collapses_after_response(
+    app, tmp_path, monkeypatch
+):
+    from PySide6.QtCore import QSettings
+
+    from noite import ui
+    from noite.config import Settings
+    from noite.ide import ProjectDock
+    from ui.client import MockClient
+
+    settings = Settings(_env_file=None, data_dir=tmp_path)
+    monkeypatch.setattr(
+        ui,
+        "QSettings",
+        lambda *_args: QSettings(str(tmp_path / "thinking.ini"), QSettings.Format.IniFormat),
+    )
+    monkeypatch.setattr(ui, "get_settings", lambda: settings)
+    monkeypatch.setattr(NoiteWindow, "_check_status", lambda self: None)
+    monkeypatch.setattr(ProjectDock, "_restore_workspace", lambda self: None)
+    window = NoiteWindow(client=MockClient())
+    window.show()
+    app.processEvents()
+
+    assert window.thinking_panel.isHidden()
+    window._on_thinking_chunk("Vou conferir os dados recebidos.")
+    app.processEvents()
+    assert not window.thinking_panel.isHidden()
+    assert window.thinking_text_label.text() == "Vou conferir os dados recebidos."
+    assert window.thinking_title.text() == "Pensamento"
+
+    window._finish_thinking()
+    QTest.qWait(230)
+    assert window.thinking_title.text().startswith("Pensou por ")
+    assert window.thinking_text_label.isHidden()
+    window._toggle_thinking_panel()
+    QTest.qWait(230)
+    assert not window.thinking_text_label.isHidden()
+    assert window.thinking_text_label.text() == "Vou conferir os dados recebidos."
+    window.close()
+
+
+def test_reference_dashboard_and_composer_follow_empty_chat_layout(app, tmp_path, monkeypatch):
+    from noite import ui
+    from noite.config import Settings
+    from ui.client import MockClient
+
+    settings = Settings(_env_file=None, data_dir=tmp_path)
+    monkeypatch.setattr(ui, "get_settings", lambda: settings)
+    monkeypatch.setattr(NoiteWindow, "_check_status", lambda self: None)
+    window = NoiteWindow(client=MockClient())
+    window.resize(1000, 700)
+    window.show()
+    app.processEvents()
+
+    assert window.sidebar.width() == 220
+    assert window.chips_grid.rowCount() == 2
+    assert window.main_layout.indexOf(window.composer) == -1
+    assert window.welcome_layout.indexOf(window.composer) >= 0
+    assert window.context_panel.reference_project.text() == "Projeto ativo\nNoite-2.0"
+    assert "18 documentos" in window.context_panel.reference_documents.text()
+    assert window.context_panel.isHidden()
+    assert window.activity_toggle_button.text() == "Abrir painel"
+    assert window.findChild(QLabel, "chromeName") is None
+    assert set(window.context_panel.tool_buttons) == {
+        "Calculadora",
+        "Pesquisa na Web",
+        "Executar Comando",
+        "Abrir Arquivo",
+    }
+
+    window._append_message("user", "Teste de layout")
+    assert window.main_layout.indexOf(window.composer) >= 0
+    window._messages.clear()
+    window._render_chat()
+    assert window.welcome_layout.indexOf(window.composer) >= 0
+    window.close()
 
 
 def test_moon_icon_is_multiresolution_and_loadable(app):
@@ -418,12 +519,12 @@ def test_conversation_sidebar_supports_create_open_rename_delete_and_restore(
         == 2
     )
 
-    window.new_conversation_button.click()
+    window.new_conversation()
     created_id = window.conversation_id
     assert created_id != "default"
     assert not window.chat.toPlainText().strip()
 
-    asyncio.run(window.service.respond("oi", conversation_id=created_id))
+    asyncio.run(window.client.enviar("oi", conversation_id=created_id))
     window._refresh_conversation_list(created_id)
     assert window.conversation_list.currentItem().text() == "oi"
 
@@ -495,13 +596,15 @@ def test_command_palette_shortcut_navigation_and_collapsible_panels(
 
     window._toggle_context_panel()
     assert not window.context_panel.isHidden()
+    window._toggle_context_panel()
+    assert window.context_panel.isHidden()
     window._toggle_sidebar()
     assert window.sidebar.isHidden()
     assert not window.expand_sidebar_button.isHidden()
     window._toggle_sidebar()
     assert not window.sidebar.isHidden()
     assert window.expand_sidebar_button.isHidden()
-    assert window.size().width() == 1366
+    assert window.size().width() == window.maximumWidth()
 
     window.close()
 
@@ -542,10 +645,16 @@ def test_sidebar_positions_and_theme_preferences_persist(app, tmp_path, monkeypa
     monkeypatch.setattr(ui, "get_settings", lambda: settings)
     monkeypatch.setattr(NoiteWindow, "_check_status", lambda self: None)
     monkeypatch.setattr(ProjectDock, "_restore_workspace", lambda self: None)
-
     window = NoiteWindow()
     assert window.windowFlags() & Qt.WindowType.FramelessWindowHint
-    assert window.minimumSize().width() == 920
+    screen_size = QGuiApplication.primaryScreen().availableGeometry().size()
+    assert window.minimumSize().width() == min(900, screen_size.width())
+    assert window.size().width() <= screen_size.width()
+    assert window.size().height() <= screen_size.height()
+    assert window.size().width() == min(
+        screen_size.width(),
+        max(window.minimumSize().width(), round(screen_size.width() * 0.8)),
+    )
     window._apply_theme("light")
     assert window.styleSheet() == ui.LIGHT_THEME
     assert "#fbfaff" in window.command_palette.styleSheet()
@@ -573,7 +682,7 @@ def test_sidebar_positions_and_theme_preferences_persist(app, tmp_path, monkeypa
     window.close()
 
 
-def test_progress_panel_auto_opens_for_real_operation_and_closes_afterward(
+def test_real_operation_updates_composer_status_without_opening_side_panel(
     app, tmp_path, monkeypatch
 ):
     from PySide6.QtCore import QSettings
@@ -592,19 +701,22 @@ def test_progress_panel_auto_opens_for_real_operation_and_closes_afterward(
     monkeypatch.setattr(ui, "get_settings", lambda: settings)
     monkeypatch.setattr(NoiteWindow, "_check_status", lambda self: None)
     monkeypatch.setattr(ProjectDock, "_restore_workspace", lambda self: None)
+    QSettings(preferences_file, QSettings.Format.IniFormat).setValue(
+        "panels/activity_visible", False
+    )
 
     window = NoiteWindow()
     assert window.context_panel.isHidden()
     started = make_activity_event("Leitura de anexos", "started", "Extraindo documentos")
     window._record_activity(started)
-    assert not window.context_panel.isHidden()
-    assert window._progress_auto_opened
+    assert window.context_panel.isHidden()
+    assert window.progress.text() == "Pensando…"
 
     window._record_activity(
         make_activity_event("Leitura de anexos", "completed", "Extração concluída")
     )
     assert window.context_panel.isHidden()
-    assert not window._progress_auto_opened
+    assert window.progress.text() == "Resposta recebida"
     window.close()
 
 
@@ -640,6 +752,7 @@ def test_selected_attachment_excerpt_is_sent_through_chat_worker(
 
     class WorkerStub:
         streamed = SignalStub()
+        thinking_streamed = SignalStub()
         activity = SignalStub()
 
     def synchronous_worker(self, task, *, completed=None, finished=None, **_kwargs):
@@ -650,7 +763,7 @@ def test_selected_attachment_excerpt_is_sent_through_chat_worker(
             finished()
         return None
 
-    monkeypatch.setattr(ui.AssistantService, "respond", fake_respond)
+    monkeypatch.setattr(ui.ServiceClient, "enviar", fake_respond)
     monkeypatch.setattr(NoiteWindow, "_start_worker", synchronous_worker)
     window = NoiteWindow()
     attachment_text = "Introdução. " * 500 + "GPU VRAM regressão Qwen. " + "Apêndice. " * 500

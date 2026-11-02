@@ -6,10 +6,10 @@ Estabilização das funcionalidades presentes concluída. O plano mestre ainda t
 
 ## Ambiente e preservação
 
-- Worktree: `C:\Users\crist\Noite-2.0-worktrees\stabilize-core-lab-1d2bbe70186b491093ebdb2b7307e001`.
-- Branch: `codex/noite-ui-build`.
-- Commit-base preservado: `b1f2e87fb60c9cd1ae8fa7d2c32c5b66d2fb8efa`.
-- Alterações locais anteriores foram mantidas; nenhuma alteração destrutiva ou operação Git remota foi executada.
+- Worktree: `<caminho-local-do-worktree>`.
+- Branch: `ui-correcao` (branch de publicação).
+- Snapshot-base preservado: `2176ec54b4598a303d4fb53f9756bd393aa80ce8`, filho de `b1f2e87`.
+- Alterações locais anteriores foram mantidas. `git fetch origin` atualizou as referências para auditoria; nenhuma integração foi feita.
 - Hardware alvo registrado: Intel i7-3770 sem AVX2, GTX 1660 Super 6 GB, 16 GB DDR3, Windows 11 x64 e SSD SATA.
 
 ## Arquitetura observada
@@ -97,3 +97,36 @@ Não declarar essas fases completas até implementar e validar cada critério em
 - Validação final após os ajustes de janela: `pytest -q` — 211 passaram, 1 ignorado; `ruff check .`, `python -m compileall -q src tests` e `git diff --check` passaram. O último comando informou apenas avisos de conversão LF/CRLF existentes no checkout.
 - EXE separado gerado e aberto: `dist/Noite-2.0-ReferenceFit-20261101.exe`, 8.679.371 bytes, SHA-256 `7EA383AD7C842DCD88DCDA6FECB32A25293ECF1D34A63B95DFB3DC392D78844E`. Build PyInstaller é lançador dependente do checkout e `.venv`; EXEs anteriores foram preservados.
 - O teste de interface confirmou início e status do backend, mas nenhuma nova mensagem foi enviada nesta rodada; a validação de conversa real permanece a execução local já registrada na seção de estabilização.
+
+## Continuidade da correção visual — 2026-11-01
+
+- Comparação visual executada em modo `--mock` a 1366×768; referência original é 1672×941. O mock existe apenas para comparação e não altera a preferência persistida. A janela do cliente real abriu e exibiu Ollama `Online` com `qwen2.5:3b`.
+- Validação local do `ServiceClient` em `127.0.0.1:11434`, modelo `qwen2.5:3b`: modelo instalado, um chunk recebido e resposta `OK`. Isso valida a chamada do cliente de serviço, não uma mensagem enviada pela interface real.
+- Validação final: `.venv\Scripts\python.exe -m pytest -q` — **215 passaram, 1 ignorado**, exit 0; `.venv\Scripts\ruff.exe check .` — aprovado, exit 0; `compileall -q src ui run_ui.py tests` — exit 0; `git diff --check` — exit 0.
+- EXE gerado e inicializado: `dist/Noite-2.0-UI-ReferenceFit-20261101.exe`, 8.681.241 bytes, SHA-256 `BEF3A2153A328984DA58D7AE9EF825A893007A0E427F28E48ED3A8C2BC950815`. É lançador dependente do checkout e `.venv`, não instalador/autônomo. EXEs anteriores foram preservados.
+- Diferenças/limites observados: a conta real mantém a posição de sidebar previamente salva (topo); a comparação mock usa sidebar à esquerda. O avatar fotográfico é representado por inicial; o banner usa ilustração vetorial em vez de fotografia; calculadora e pesquisa web aparecem sem ação implementada; captura do tema claro e gesto manual de redimensionamento não foram validados visualmente. A captura disponível não permite declarar paridade pixel a pixel.
+- Estado Git preservado na branch `ui-correcao`, HEAD `2176ec5`; sem commit, push, merge ou operação remota. Alterações locais e arquivos novos continuam no working tree.
+
+## Correção visual e entrega — 2026-11-02
+
+- Painel direito limitado a Destaques, Contexto Atual e Ferramentas; atividade removida. Largura adaptável, diretório com reticências centrais, banner quebrável e recolhimento abaixo de 1200 px.
+- Barra superior sem marca duplicada; mensagens sem cartões, rótulos Você/Noite e copiar em blocos Markdown/código.
+- Pensamento só aparece quando o Ollama fornece o campo nativo. A detecção é feita por metadados e o gateway usa `think=true` no streaming compatível; `qwen2.5:3b` instalado não anuncia suporte. Nenhum modelo foi baixado.
+- Janela frameless com resize por bordas/cantos, tamanho inicial limitado à tela, scrollbars finas com auto-hide, streaming em blocos e redução de animações consultada no Windows.
+- Validação final: `pytest -vv -x` — 222 passaram, 1 ignorado (symlink externo não suportado nesse teste no Windows); `ruff check .`, `compileall -q src ui run_ui.py tests` e `git diff --check` passaram.
+- Capturas mock de comparação geradas para 1280×720 e 1672×941, dark/light, pensamento aberto/fechado na pasta de revisão externa ao repositório `Noite-ui-review-20261102`. A janela real abriu e mostrou Ollama Online com `qwen2.5:3b`; a conversa real está registrada na seção de ajustes solicitados abaixo.
+- Diferenças conhecidas: ilustração vetorial de notebook em vez de fotografia;  cantos/título do Qt não são pixel idênticos. O pensamento real não pôde ser exibido com o modelo instalado.
+- Build: `dist\Noite.exe`, 8.681.064 bytes, SHA-256 `23E9D181FCAFB5EFE43CD61A022C74F214151D91B1A8BF7614ACEAA63B89E53D`; inicialização confirmou status local Online. Build é launcher dependente do checkout e do `.venv`, não instalador standalone.
+- Atalho de desktop `Noite.lnk` atualizado e relido: aponta para esse `Noite.exe`, diretório de trabalho do worktree e `assets\noite.ico`.
+- Permanecem quatro EXEs antigos em `dist`; a tentativa de removê-los foi rejeitada pelo executor e não foi repetida por outra via.
+- Branch `ui-correcao`, HEAD `2176ec5`; alterações locais preservadas. Sem commit, push, merge ou operação remota.
+
+
+## Ajustes solicitados — 2026-11-02
+
+- Sidebar inicia à esquerda, ignorando a preferência anterior; a seleção da tela de configurações continua disponível durante a sessão.
+- Título do banner em duas linhas explícitas. Abaixo de 340 px, a ilustração cede espaço ao texto para evitar quebra extra.
+- Teste de layout estreito atualizado e validado. Suíte: 222 passaram, 1 ignorado. Ruff, compilação e diff check aprovados.
+- Mensagem enviada pela UI com `ServiceClient` e `qwen2.5:3b`: pergunta “Responda apenas: integração real confirmada.”; a resposta “integração real confirmada.” apareceu no chat. O EXE novo abriu e mostrou a conversa salva.
+- Novo `dist\Noite.exe`: 8.679.768 bytes; SHA-256 `0FCCE2695CCB10B540FA24BA6E67CD8AC70E6905D725E507CF8049EBC221CCD8`. Atalho da Área de Trabalho relido e apontando ao build, ao diretório correto e ao ícone `assets\noite.ico`.
+- Os quatro builds antigos continuam em `dist`, aguardando confirmação explícita para remoção.

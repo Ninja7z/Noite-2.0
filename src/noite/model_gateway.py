@@ -1,10 +1,12 @@
 import asyncio
+import json
 import logging
 import random
 from collections.abc import Callable, Sequence
 from time import perf_counter
 from uuid import uuid4
 
+import httpx
 from litellm import acompletion, completion_cost
 from litellm.exceptions import APIConnectionError, OpenAIError, Timeout
 
@@ -13,6 +15,7 @@ from .task_router import route_model
 from .workspace import _redact_secret_values
 
 logger = logging.getLogger("noite.model_gateway")
+MAX_THINKING_RESPONSE_TOKENS = 2048
 
 
 class _InvalidModelResponse(Exception):
@@ -25,12 +28,32 @@ async def ask_local_model(
     messages: Sequence[dict[str, str]] | None = None,
     model: str | None = None,
     on_chunk: Callable[[str], None] | None = None,
+    on_thinking: Callable[[str], None] | None = None,
 ) -> str:
     settings = get_settings()
     timeout_seconds = getattr(settings, "model_timeout_seconds", 180)
+    selected_model = model or settings.local_model
+    if on_thinking is not None and await _model_supports_thinking(
+        settings.ollama_base_url, selected_model
+    ):
+        try:
+            return await _ask_ollama_thinking_chat(
+                settings.ollama_base_url,
+                selected_model,
+                list(messages) if messages is not None else [{"role": "user", "content": prompt}],
+                timeout_seconds,
+                on_chunk,
+                on_thinking,
+            )
+        except httpx.TimeoutException:
+            raise RuntimeError(
+                f"O modelo local excedeu o tempo limite de {timeout_seconds} segundos."
+            ) from None
+        except httpx.HTTPError:
+            raise RuntimeError("O provedor do modelo local retornou um erro.") from None
     try:
         response = await acompletion(
-            model=f"ollama/{model or settings.local_model}",
+            model=f"ollama/{selected_model}",
             api_base=settings.ollama_base_url,
             messages=(
                 list(messages) if messages is not None else [{"role": "user", "content": prompt}]
@@ -61,6 +84,67 @@ async def ask_local_model(
         raise RuntimeError("O provedor do modelo local retornou um erro.") from None
     content = response.choices[0].message.content
     return content if isinstance(content, str) else ""
+
+
+async def _model_supports_thinking(base_url: str, model: str) -> bool:
+    """Use Ollama's advertised metadata; do not guess based on the model name."""
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.post(
+                f"{base_url.rstrip('/')}/api/show", json={"model": model}
+            )
+            response.raise_for_status()
+        values = response.json().get("thinking", {}).get("values", ())
+    except (httpx.HTTPError, ValueError, AttributeError, TypeError):
+        return False
+    if not isinstance(values, (list, tuple)):
+        return False
+    return any(value is True or isinstance(value, str) for value in values)
+
+
+async def _ask_ollama_thinking_chat(
+    base_url: str,
+    model: str,
+    messages: list[dict[str, str]],
+    timeout: float,
+    on_chunk: Callable[[str], None] | None,
+    on_thinking: Callable[[str], None] | None,
+) -> str:
+    payload = {
+        "model": model,
+        "messages": messages,
+        "think": True,
+        "stream": on_chunk is not None,
+        "options": {"num_predict": MAX_THINKING_RESPONSE_TOKENS},
+    }
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        if on_chunk is None:
+            response = await client.post(f"{base_url.rstrip('/')}/api/chat", json=payload)
+            response.raise_for_status()
+            message = response.json().get("message", {})
+            thinking = message.get("thinking")
+            if on_thinking is not None and isinstance(thinking, str) and thinking:
+                on_thinking(thinking)
+            content = message.get("content")
+            return content if isinstance(content, str) else ""
+
+        parts: list[str] = []
+        async with client.stream(
+            "POST", f"{base_url.rstrip('/')}/api/chat", json=payload
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                message = json.loads(line).get("message", {})
+                thinking = message.get("thinking")
+                content = message.get("content")
+                if isinstance(thinking, str) and thinking and on_thinking is not None:
+                    on_thinking(thinking)
+                if isinstance(content, str) and content:
+                    parts.append(content)
+                    on_chunk(content)
+        return "".join(parts)
 
 
 async def ask_glm_model(

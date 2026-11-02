@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import ctypes
 import hashlib
 import html
 import inspect
@@ -9,13 +11,28 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import threading
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
-from PySide6.QtCore import QSettings, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QObject,
+    QParallelAnimationGroup,
+    QPoint,
+    QPropertyAnimation,
+    QSettings,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import (
     QDesktopServices,
     QDragEnterEvent,
@@ -28,6 +45,7 @@ from PySide6.QtGui import (
     QTextCursor,
 )
 from PySide6.QtWidgets import (
+    QAbstractScrollArea,
     QApplication,
     QBoxLayout,
     QCheckBox,
@@ -38,6 +56,8 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGraphicsOpacityEffect,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -46,21 +66,22 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
-    QSizeGrip,
-    QSizePolicy,
+    QScrollBar,
     QTextBrowser,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from ui.client import MockClient, NoiteClient, ServiceClient
+
 from .activity import make_activity_event
 from .activity_panel import ContextActivityPanel
-from .assistant import AssistantService, ollama_binary, start_ollama_server
 from .attachments import (
     MAX_ATTACHMENT_CONTEXT_CHARS,
     MAX_CONTEXT_PER_ATTACHMENT,
@@ -73,7 +94,7 @@ from .hf_catalog import search_huggingface_models
 from .ide import ProjectDock
 from .logging_setup import setup_logging
 from .terminal import is_destructive_command, run_terminal_command
-from .theme import DARK_THEME, LIGHT_THEME
+from .theme import DARK_THEME, LIGHT_THEME, UI_TOKENS, chat_document_styles
 
 logger = logging.getLogger("noite.ui")
 MAX_TERMINAL_CONTEXT_CHARS = 6_000
@@ -111,6 +132,53 @@ class InputBox(QPlainTextEdit):
         super().keyPressEvent(event)
 
 
+class AutoHideScrollBar(QScrollBar):
+    def __init__(self, orientation=Qt.Orientation.Vertical, parent=None) -> None:
+        super().__init__(orientation, parent)
+        self._opacity = QGraphicsOpacityEffect(self)
+        self._opacity.setOpacity(0)
+        self.setGraphicsEffect(self._opacity)
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.setInterval(UI_TOKENS["scrollbar"]["hide_delay_ms"])
+        self._hide_timer.timeout.connect(self._hide_if_idle)
+        self.valueChanged.connect(self._reveal)
+
+    def enterEvent(self, event) -> None:
+        self.setProperty("hovered", True)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self._reveal()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self.setProperty("hovered", False)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self._hide_timer.start()
+        super().leaveEvent(event)
+
+    def _reveal(self, _value: int | None = None) -> None:
+        self._hide_timer.start()
+        self._opacity.setOpacity(1)
+
+    def _hide_if_idle(self) -> None:
+        if not self.underMouse():
+            self._opacity.setOpacity(0)
+
+
+def install_auto_hide_scrollbars(root: QWidget) -> None:
+    if QGuiApplication.platformName() == "offscreen":
+        return
+    for area in root.findChildren(QAbstractScrollArea):
+        if not isinstance(area.verticalScrollBar(), AutoHideScrollBar):
+            area.setVerticalScrollBar(AutoHideScrollBar(Qt.Orientation.Vertical, area))
+        if not isinstance(area.horizontalScrollBar(), AutoHideScrollBar):
+            area.setHorizontalScrollBar(
+                AutoHideScrollBar(Qt.Orientation.Horizontal, area)
+            )
+
+
 class WindowChrome(QFrame):
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -125,11 +193,80 @@ class WindowChrome(QFrame):
         super().mouseDoubleClickEvent(event)
 
 
+class WindowResizeFilter(QObject):
+    """Delegate resize gestures from frameless child widgets to the OS window manager."""
+
+    _MARGIN = UI_TOKENS["layout"]["resize_margin"]
+
+    def __init__(self, window: QMainWindow) -> None:
+        super().__init__(window)
+        self.window = window
+
+    def detach(self) -> None:
+        self.window = None
+
+    def eventFilter(self, watched, event) -> bool:
+        window = self.window
+        if window is None or not isinstance(watched, QWidget):
+            return False
+        if watched is not window and not window.isAncestorOf(watched):
+            return False
+        try:
+            if window.isMaximized():
+                return False
+        except RuntimeError:
+            self.window = None
+            return False
+        if event.type() not in {QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress}:
+            return False
+        global_position = event.globalPosition().toPoint()
+        point = window.mapFromGlobal(global_position)
+        rect = window.rect()
+        margin = self._MARGIN
+        left = point.x() < margin
+        right = point.x() >= rect.width() - margin
+        top = point.y() < margin
+        bottom = point.y() >= rect.height() - margin
+        edges = Qt.Edge(0)
+        if left:
+            edges |= Qt.Edge.LeftEdge
+        if right:
+            edges |= Qt.Edge.RightEdge
+        if top:
+            edges |= Qt.Edge.TopEdge
+        if bottom:
+            edges |= Qt.Edge.BottomEdge
+        if event.type() == QEvent.Type.MouseButtonPress:
+            if edges and event.button() == Qt.MouseButton.LeftButton:
+                handle = window.windowHandle()
+                if handle is not None:
+                    handle.startSystemResize(edges)
+                    return True
+            return False
+        cursors = {
+            Qt.Edge.LeftEdge | Qt.Edge.TopEdge: Qt.CursorShape.SizeFDiagCursor,
+            Qt.Edge.RightEdge | Qt.Edge.BottomEdge: Qt.CursorShape.SizeFDiagCursor,
+            Qt.Edge.RightEdge | Qt.Edge.TopEdge: Qt.CursorShape.SizeBDiagCursor,
+            Qt.Edge.LeftEdge | Qt.Edge.BottomEdge: Qt.CursorShape.SizeBDiagCursor,
+            Qt.Edge.LeftEdge: Qt.CursorShape.SizeHorCursor,
+            Qt.Edge.RightEdge: Qt.CursorShape.SizeHorCursor,
+            Qt.Edge.TopEdge: Qt.CursorShape.SizeVerCursor,
+            Qt.Edge.BottomEdge: Qt.CursorShape.SizeVerCursor,
+        }
+        cursor = cursors.get(edges)
+        if cursor is not None:
+            window.setCursor(cursor)
+        else:
+            window.unsetCursor()
+        return False
+
+
 class TaskThread(QThread):
     completed = Signal(object)
     failed = Signal(str)
     cancelled = Signal()
     streamed = Signal(str)
+    thinking_streamed = Signal(str)
     activity = Signal(object)
 
     def __init__(self, task: Callable[[], object], parent=None) -> None:
@@ -194,21 +331,20 @@ class TaskThread(QThread):
 
 
 class NoiteWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, client: NoiteClient | None = None) -> None:
         super().__init__()
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.settings = get_settings()
         self.preferences = QSettings("Noite", "Noite 2.0")
         self._theme_mode = str(self.preferences.value("appearance/theme", "dark"))
-        self._sidebar_position = str(self.preferences.value("appearance/sidebar", "left"))
+        self._sidebar_position = "left"
         self._terminal_advanced = self.preferences.value("terminal/advanced", False, type=bool)
-        self._progress_mode = str(
-            self.preferences.value("panels/progress_mode", "during_generation")
+        self._context_panel_preference = self.preferences.value(
+            "panels/context_visible",
+            self.preferences.value("panels/activity_visible", True, type=bool),
+            type=bool,
         )
-        if self._progress_mode not in {"collapsed", "during_generation", "always"}:
-            self._progress_mode = "during_generation"
-        self._progress_auto_opened = False
         saved_model = self.preferences.value("model/local_model", "")
         saved_endpoint = self.preferences.value("model/ollama_endpoint", "")
         if saved_model:
@@ -225,13 +361,16 @@ class NoiteWindow(QMainWindow):
                 self.settings.ollama_base_url = validated.ollama_base_url
             except ValueError:
                 self.preferences.remove("model/ollama_endpoint")
-        self.service = AssistantService(self.settings)
-        self.conversation_id = self.service.active_conversation_id()
+        self.client = client or ServiceClient(self.settings)
+        self.conversation_id = self.client.active_conversation_id()
         self.worker: TaskThread | None = None
         self._workers: set[TaskThread] = set()
         self._close_when_idle = False
         self._streaming_response_active = False
         self._streaming_response_text = ""
+        self._pending_stream_chunks: list[str] = []
+        self._thinking_text = ""
+        self._thinking_started_at: float | None = None
         self._sidebar_expanded = True
         self._messages: list[tuple[str, str]] = []
         self._attachments = []
@@ -244,17 +383,58 @@ class NoiteWindow(QMainWindow):
         icon_path = Path(__file__).resolve().parents[2] / "assets" / "noite.ico"
         if icon_path.is_file():
             self.setWindowIcon(QIcon(str(icon_path)))
-        self.setMinimumSize(920, 620)
         screen = QGuiApplication.primaryScreen()
-        available = screen.availableGeometry().size() if screen is not None else None
-        width = min(1672, available.width()) if available is not None else 1160
-        height = min(941, available.height()) if available is not None else 720
-        self.resize(max(920, width), max(620, height))
+        geometry = screen.availableGeometry() if screen is not None else None
+        available = geometry.size() if geometry is not None else None
+        minimum_width = (
+            min(UI_TOKENS["layout"]["window_min_width"], available.width())
+            if available
+            else UI_TOKENS["layout"]["window_min_width"]
+        )
+        minimum_height = (
+            min(UI_TOKENS["layout"]["window_min_height"], available.height())
+            if available
+            else UI_TOKENS["layout"]["window_min_height"]
+        )
+        self.setMinimumSize(minimum_width, minimum_height)
+        if available:
+            ratio = UI_TOKENS["layout"]["window_initial_ratio"]
+            width = min(available.width(), max(minimum_width, round(available.width() * ratio)))
+            height = min(
+                available.height(), max(minimum_height, round(available.height() * ratio))
+            )
+        else:
+            width, height = 1160, 720
+        self.resize(width, height)
+        if geometry is not None:
+            self.setMaximumSize(geometry.size())
+            self.move(
+                geometry.x() + (geometry.width() - width) // 2,
+                geometry.y() + (geometry.height() - height) // 2,
+            )
         self._build_ui()
-        self._apply_sidebar_position(self._sidebar_position)
+        if isinstance(self.client, MockClient):
+            self._apply_sidebar_position("left", persist=False)
+        else:
+            self._apply_sidebar_position(self._sidebar_position)
         self._refresh_conversation_list(self.conversation_id)
         self._load_history()
         self._check_status()
+        app = QApplication.instance()
+        self._window_resize_filter = WindowResizeFilter(self)
+        self._resize_filter_installed = bool(
+            app is not None and QGuiApplication.platformName() != "offscreen"
+        )
+        if app is not None and self._resize_filter_installed:
+            app.installEventFilter(self._window_resize_filter)
+            app_ref = app
+            resize_filter = self._window_resize_filter
+
+            def remove_resize_filter(_object=None) -> None:
+                resize_filter.detach()
+                app_ref.removeEventFilter(resize_filter)
+
+            self.destroyed.connect(remove_resize_filter)
         self._status_timer = QTimer(self)
         self._status_timer.setInterval(20_000)
         self._status_timer.timeout.connect(self._check_status)
@@ -265,9 +445,38 @@ class NoiteWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        if hasattr(self, "resize_grip"):
-            root = self.centralWidget()
-            self.resize_grip.move(root.width() - 16, root.height() - 16)
+        if hasattr(self, "context_panel"):
+            layout_tokens = UI_TOKENS["layout"]
+            panel_width = max(
+                layout_tokens["panel_min_width"],
+                round(self.width() * layout_tokens["panel_ratio"]),
+            )
+            panel_width = min(layout_tokens["panel_max_width"], panel_width)
+            self.context_panel.setFixedWidth(panel_width)
+            if (
+                self.width() < layout_tokens["panel_breakpoint"]
+                and not self._context_panel_user_open
+            ):
+                self.context_panel.hide()
+            elif (
+                self.width() >= layout_tokens["panel_breakpoint"]
+                and not self.context_panel.isVisible()
+            ):
+                if self._context_panel_preference:
+                    self.context_panel.show()
+            self._sync_context_panel_button()
+        if hasattr(self, "sidebar") and self._sidebar_position != "top":
+            layout_tokens = UI_TOKENS["layout"]
+            sidebar_width = max(
+                layout_tokens["sidebar_min_width"],
+                min(
+                    layout_tokens["sidebar_max_width"],
+                    round(self.width() * layout_tokens["sidebar_ratio"]),
+                ),
+            )
+            self.sidebar.setMinimumWidth(sidebar_width)
+            self.sidebar.setMaximumWidth(sidebar_width)
+        self._update_responsive_chips()
 
     def _toggle_maximized(self) -> None:
         if self.isMaximized():
@@ -285,6 +494,28 @@ class NoiteWindow(QMainWindow):
             return "Boa tarde!"
         return "Boa noite!"
 
+    def _update_responsive_chips(self, force: bool = False) -> None:
+        if not hasattr(self, "chips_grid") or not hasattr(self, "quick_chips"):
+            return
+        compact = self.width() < UI_TOKENS["layout"]["panel_breakpoint"]
+        if not force and compact == self._chips_compact:
+            return
+        for chip in self.quick_chips:
+            self.chips_grid.removeWidget(chip)
+        for column in range(6):
+            self.chips_grid.setColumnStretch(column, 0)
+        if compact:
+            self.chips_grid.setColumnStretch(0, 1)
+            self.chips_grid.setColumnStretch(3, 1)
+            for index, chip in enumerate(self.quick_chips):
+                self.chips_grid.addWidget(chip, index // 2, 1 + index % 2)
+        else:
+            self.chips_grid.setColumnStretch(0, 1)
+            self.chips_grid.setColumnStretch(5, 1)
+            for index, chip in enumerate(self.quick_chips):
+                self.chips_grid.addWidget(chip, 0, index + 1)
+        self._chips_compact = compact
+
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -298,15 +529,6 @@ class NoiteWindow(QMainWindow):
         chrome_layout = QHBoxLayout(chrome)
         chrome_layout.setContentsMargins(18, 0, 10, 0)
         chrome_layout.setSpacing(10)
-        chrome_logo = QLabel("☾")
-        chrome_logo.setObjectName("chromeMoon")
-        chrome_layout.addWidget(chrome_logo)
-        chrome_name = QLabel("Noite")
-        chrome_name.setObjectName("chromeName")
-        chrome_layout.addWidget(chrome_name)
-        chrome_version = QLabel("2.0")
-        chrome_version.setObjectName("chromeVersion")
-        chrome_layout.addWidget(chrome_version)
         chrome_layout.addStretch(1)
         self.status_dot = QLabel()
         self.status_dot.setObjectName("statusDot")
@@ -337,10 +559,6 @@ class NoiteWindow(QMainWindow):
         shell.setContentsMargins(0, 0, 0, 0)
         shell.setSpacing(0)
         root_layout.addLayout(shell, 1)
-        self.resize_grip = QSizeGrip(root)
-        self.resize_grip.setFixedSize(16, 16)
-        self.resize_grip.raise_()
-
         rail = QFrame()
         self.icon_rail = rail
         rail.setObjectName("iconRail")
@@ -348,8 +566,9 @@ class NoiteWindow(QMainWindow):
         rail_layout = QVBoxLayout(rail)
         rail_layout.setContentsMargins(8, 14, 8, 14)
         rail_layout.setSpacing(16)
-        mark = QLabel("☾")
+        mark = QLabel()
         mark.setObjectName("brandMark")
+        mark.setPixmap(self._icon("moon").pixmap(36, 36))
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         mark.setFixedSize(38, 38)
         rail_layout.addWidget(mark)
@@ -372,15 +591,16 @@ class NoiteWindow(QMainWindow):
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setMinimumWidth(220)
+        sidebar.setMinimumWidth(UI_TOKENS["layout"]["sidebar_min_width"])
         self.sidebar = sidebar
         side_layout = QVBoxLayout(sidebar)
         self.side_layout = side_layout
         side_layout.setContentsMargins(14, 18, 14, 14)
         side_layout.setSpacing(8)
         side_header = QHBoxLayout()
-        side_moon = QLabel("☾")
+        side_moon = QLabel()
         side_moon.setObjectName("brandMark")
+        side_moon.setPixmap(self._icon("moon").pixmap(42, 42))
         side_moon.setFixedSize(42, 42)
         side_header.addWidget(side_moon)
         side_title = QLabel("Noite")
@@ -399,29 +619,48 @@ class NoiteWindow(QMainWindow):
         side_header.addWidget(self.collapse_sidebar_button)
         side_layout.addLayout(side_header)
 
-        self.home_nav_button = self._nav_button("⌂   Início", "Ir para a conversa atual")
+        self.home_nav_button = self._nav_button("Início", "Ir para a conversa atual", "home")
+        self.home_nav_button.setCheckable(True)
+        self.home_nav_button.setChecked(True)
         self.home_nav_button.clicked.connect(self._focus_conversation)
         side_layout.addWidget(self.home_nav_button)
-        self.workspace_nav_button = self._nav_button("♺   Workspace", "Abrir ou trocar o projeto")
+        self.workspace_nav_button = self._nav_button(
+            "Workspace", "Abrir ou trocar o projeto", "folder"
+        )
         self.workspace_nav_button.clicked.connect(self._open_project)
         side_layout.addWidget(self.workspace_nav_button)
+        projects_button = self._nav_button("Projetos", "Abrir ou trocar o projeto", "grid")
+        projects_button.clicked.connect(self._open_project)
+        side_layout.addWidget(projects_button)
         self.settings_nav_button = self._nav_button(
-            "⚙   Configurações", "Aparência, modelo e ferramentas"
+            "Configurações", "Aparência, modelo e ferramentas", "settings"
         )
         self.settings_nav_button.clicked.connect(self._open_settings)
         side_layout.addWidget(self.settings_nav_button)
+        help_button = self._nav_button("Ajuda", "Abrir informações e ajuda", "help")
+        help_button.clicked.connect(self._show_about)
+        side_layout.addWidget(help_button)
         side_layout.addSpacing(10)
 
-        self._side_section(side_layout, "SESSÕES RECENTES")
-        self.new_conversation_button = QPushButton("+   Nova conversa")
+        self._side_section(side_layout, "Sessões recentes")
+        self.new_conversation_button = QPushButton("Ver todas")
         self.new_conversation_button.setObjectName("sideButton")
         self.new_conversation_button.setMinimumHeight(36)
-        self.new_conversation_button.clicked.connect(self.new_conversation)
-        self.new_conversation_button.setAccessibleName("Criar nova conversa")
+        self.new_conversation_button.clicked.connect(
+            lambda: self.conversation_list.setFocus()
+        )
+        self.new_conversation_button.setAccessibleName("Ver todas as conversas")
         side_layout.addWidget(self.new_conversation_button)
         self.conversation_list = QListWidget()
         self.conversation_list.setObjectName("conversationList")
         self.conversation_list.setAccessibleName("Conversas salvas")
+        self.conversation_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.conversation_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.conversation_list.customContextMenuRequested.connect(
+            self._show_conversation_menu
+        )
         self.conversation_list.currentItemChanged.connect(self._conversation_selected)
         side_layout.addWidget(self.conversation_list, 1)
         conversation_actions = QHBoxLayout()
@@ -433,59 +672,75 @@ class NoiteWindow(QMainWindow):
         self.delete_conversation_button.clicked.connect(self.delete_current_conversation)
         conversation_actions.addWidget(self.rename_conversation_button)
         conversation_actions.addWidget(self.delete_conversation_button)
-        side_layout.addLayout(conversation_actions)
+        conversation_actions.setContentsMargins(0, 0, 0, 0)
+        conversation_actions_widget = QWidget()
+        conversation_actions_widget.setLayout(conversation_actions)
+        conversation_actions_widget.hide()
+        side_layout.addWidget(conversation_actions_widget)
 
         privacy = QFrame()
         privacy.setObjectName("privacyCard")
         privacy_layout = QVBoxLayout(privacy)
         privacy_layout.setContentsMargins(12, 10, 12, 10)
         privacy_layout.setSpacing(4)
+        privacy_header = QHBoxLayout()
+        shield = QLabel()
+        shield.setPixmap(self._icon("shield").pixmap(25, 25))
+        privacy_header.addWidget(shield)
         privacy_title = QLabel("Noite é privada.")
         privacy_title.setObjectName("privacyTitle")
-        privacy_layout.addWidget(privacy_title)
-        local_note = QLabel("Seus dados e conversas permanecem neste computador.")
+        privacy_header.addWidget(privacy_title)
+        privacy_header.addStretch(1)
+        privacy_layout.addLayout(privacy_header)
+        local_note = QLabel("Seus dados permanecem no seu ambiente.")
         local_note.setObjectName("sideNote")
         local_note.setWordWrap(True)
         privacy_layout.addWidget(local_note)
         side_layout.addWidget(privacy)
+        user_row = QHBoxLayout()
+        avatar = QLabel("c")
+        avatar.setObjectName("userAvatar")
+        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        user_row.addWidget(avatar)
+        user_name = QLabel("cristnzx")
+        user_name.setObjectName("userName")
+        user_row.addWidget(user_name)
+        user_row.addStretch(1)
+        side_layout.addLayout(user_row)
         shell.addWidget(sidebar)
 
 
         main = QWidget()
         main.setObjectName("mainPane")
         layout = QVBoxLayout(main)
+        self.main_layout = layout
         layout.setContentsMargins(26, 18, 26, 14)
         layout.setSpacing(12)
 
         header = QHBoxLayout()
         header.setSpacing(10)
-        title_column = QVBoxLayout()
-        title_column.setSpacing(2)
-        title = QLabel("Noite 2.0")
-        title.setObjectName("title")
-        self.conversation_title = QLabel("Conversa atual")
-        self.conversation_title.setObjectName("conversationTitle")
-        title_column.addWidget(title)
-        title_column.addWidget(self.conversation_title)
-        header.addLayout(title_column)
+        mode_icon = QLabel()
+        mode_icon.setPixmap(self._icon("sparkle").pixmap(20, 20))
+        header.addWidget(mode_icon)
+        self.conversation_title = QLabel("Modo: Assistente Geral")
+        self.conversation_title.setObjectName("modePill")
+        header.addWidget(self.conversation_title)
         header.addStretch(1)
         self.palette_button = QToolButton()
         self.palette_button.setObjectName("toggleActivityButton")
-        self.palette_button.setText("⌕")
+        self.palette_button.setIcon(self._icon("search"))
+        self.palette_button.setIconSize(QSize(20, 20))
         self.palette_button.setToolTip("Ações rápidas (Ctrl+K)")
         self.palette_button.setAccessibleName("Abrir ações rápidas")
         self.palette_button.clicked.connect(self._open_command_palette)
         header.addWidget(self.palette_button)
         self.activity_toggle_button = QToolButton()
         self.activity_toggle_button.setObjectName("toggleActivityButton")
-        self.activity_toggle_button.setText("Atividade")
-        self.activity_toggle_button.setToolTip("Mostrar contexto e atividade da sessão")
-        self.activity_toggle_button.setAccessibleName("Mostrar contexto e atividade")
+        self.activity_toggle_button.setText("Abrir painel")
+        self.activity_toggle_button.setToolTip("Abrir ou fechar o painel lateral")
+        self.activity_toggle_button.setAccessibleName("Abrir painel")
         self.activity_toggle_button.clicked.connect(self._toggle_context_panel)
         header.addWidget(self.activity_toggle_button)
-        model_label = QLabel("Modelo")
-        model_label.setObjectName("muted")
-        header.addWidget(model_label)
         self.model_box = QComboBox()
         self.model_box.setObjectName("modelPill")
         self.model_box.setEditable(True)
@@ -506,11 +761,13 @@ class NoiteWindow(QMainWindow):
         self.welcome = QFrame()
         self.welcome.setObjectName("welcome")
         welcome_layout = QVBoxLayout(self.welcome)
+        self.welcome_layout = welcome_layout
         welcome_layout.setContentsMargins(20, 24, 20, 24)
         welcome_layout.setSpacing(10)
-        welcome_layout.addStretch(1)
-        welcome_mark = QLabel("☾")
+        welcome_layout.addSpacing(8)
+        welcome_mark = QLabel()
         welcome_mark.setObjectName("welcomeMark")
+        welcome_mark.setPixmap(self._icon("moon").pixmap(110, 110))
         welcome_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         welcome_layout.addWidget(welcome_mark)
         self.welcome_title = QLabel(self._greeting())
@@ -546,37 +803,86 @@ class NoiteWindow(QMainWindow):
         self.ollama_banner.hide()
         welcome_layout.addWidget(self.ollama_banner)
 
-        chips_row = QHBoxLayout()
-        chips_row.setSpacing(10)
-        chips_row.addStretch(1)
-        for label, handler, tooltip in (
-            ("<>  Analisar código", self._open_project, "Abrir o editor do projeto"),
-            ("▤  Criar plano", lambda: self._seed_input("Monte um plano em passos para: "),
-             "Preparar um pedido de plano"),
+        self.chips_grid = QGridLayout()
+        self.chips_grid.setHorizontalSpacing(10)
+        self.chips_grid.setVerticalSpacing(10)
+        self.quick_chips = []
+        for label, handler, tooltip, icon_name in (
             (
-                "▷  Executar testes",
-                lambda: self._seed_input("Resuma e explique os testes deste projeto: "),
-                "Preparar um pedido sobre testes",
+                "Analisar código",
+                lambda: self._seed_input("Analise o código de: "),
+                "Preparar uma análise de código",
+                "code",
             ),
-            ("▣  Explorar projeto", self._open_project_search, "Buscar arquivos do workspace"),
+            ("Criar plano", lambda: self._seed_input("Monte um plano em passos para: "),
+             "Preparar um pedido de plano", "plan"),
+            (
+                "Buscar na web",
+                lambda: self._seed_input("Pesquise na web sobre: "),
+                "Preparar uma pesquisa na web",
+                "web",
+            ),
+            (
+                "Explorar projeto",
+                lambda: self._seed_input("Explore o projeto e localize: "),
+                "Preparar uma exploração do projeto",
+                "folder",
+            ),
         ):
             chip = QPushButton(label)
             chip.setObjectName("chip")
+            chip.setIcon(self._icon(icon_name))
+            chip.setIconSize(QSize(18, 18))
             chip.setToolTip(tooltip)
             chip.setAccessibleName(tooltip)
             chip.clicked.connect(handler)
-            chips_row.addWidget(chip)
-        chips_row.addStretch(1)
-        welcome_layout.addLayout(chips_row)
-        welcome_layout.addStretch(1)
+            self.quick_chips.append(chip)
+        self._chips_compact = False
+        self._update_responsive_chips(force=True)
+        welcome_layout.addLayout(self.chips_grid)
+        welcome_layout.addStretch(8)
         layout.addWidget(self.welcome, 1)
+
+        self.thinking_panel = QFrame()
+        self.thinking_panel.setObjectName("thinkingPanel")
+        thinking_layout = QVBoxLayout(self.thinking_panel)
+        thinking_layout.setContentsMargins(12, 8, 12, 8)
+        thinking_layout.setSpacing(4)
+        thinking_header = QHBoxLayout()
+        self.thinking_title = QLabel("Pensamento")
+        self.thinking_title.setObjectName("thinkingTitle")
+        thinking_header.addWidget(self.thinking_title)
+        thinking_header.addStretch(1)
+        self.thinking_toggle = QToolButton()
+        self.thinking_toggle.setObjectName("thinkingToggle")
+        self.thinking_toggle.setIcon(self._icon("chevron-down"))
+        self.thinking_toggle.setIconSize(QSize(16, 16))
+        self.thinking_toggle.setAccessibleName("Recolher pensamento")
+        self.thinking_toggle.clicked.connect(self._toggle_thinking_panel)
+        thinking_header.addWidget(self.thinking_toggle)
+        thinking_layout.addLayout(thinking_header)
+        self.thinking_text_label = QLabel()
+        self.thinking_text_label.setObjectName("thinkingText")
+        self.thinking_text_label.setWordWrap(True)
+        self.thinking_text_label.setMaximumHeight(160)
+        thinking_layout.addWidget(self.thinking_text_label)
+        self.thinking_panel.hide()
+        layout.addWidget(self.thinking_panel)
 
         self.chat = QTextBrowser()
         self.chat.setOpenExternalLinks(False)
         self.chat.setObjectName("chat")
+        self.chat.anchorClicked.connect(self._handle_chat_link)
         self.chat.hide()
         layout.addWidget(self.chat, 1)
-
+        self._follow_chat_tail = True
+        self._auto_scroll_active = False
+        self._chat_scroll_animation = None
+        self._stream_flush_timer = QTimer(self)
+        self._stream_flush_timer.setSingleShot(True)
+        self._stream_flush_timer.setInterval(UI_TOKENS["motion"]["stream_batch_ms"])
+        self._stream_flush_timer.timeout.connect(self._flush_stream_chunks)
+        self.chat.viewport().installEventFilter(self)
 
         composer = QFrame()
         composer.setObjectName("composer")
@@ -598,24 +904,34 @@ class NoiteWindow(QMainWindow):
         self.attachment_row.hide()
         composer_layout.addWidget(self.attachment_row)
         composer_head = QHBoxLayout()
-        self.composer_project_label = QLabel("▱   Noite 2.0")
+        self.composer_head = QWidget()
+        self.composer_head.setLayout(composer_head)
+        self.composer_project_label = QLabel("Noite 2.0")
         self.composer_project_label.setObjectName("composerProject")
         composer_head.addWidget(self.composer_project_label)
         composer_head.addStretch(1)
         self.progress = QLabel("Pronta")
         self.progress.setObjectName("progress")
         composer_head.addWidget(self.progress)
-        composer_layout.addLayout(composer_head)
+        composer_layout.addWidget(self.composer_head)
 
         compose = QHBoxLayout()
         compose.setSpacing(10)
+        composer_sparkle = QLabel()
+        composer_sparkle.setPixmap(self._icon("sparkle").pixmap(22, 22))
+        compose.addWidget(composer_sparkle)
         self.input = InputBox()
+        self.input.installEventFilter(self)
         self.input.files_dropped.connect(self._attach_files)
         self.input.setObjectName("input")
-        self.input.setPlaceholderText("Pergunte qualquer coisa à Noite…")
+        self.input.setPlaceholderText(
+            "Digite sua pergunta, peça uma tarefa ou escolha uma opção…"
+        )
         self.input.setFixedHeight(74)
         self.input.send_requested.connect(self.send_message)
-        self.send_button = QPushButton("↑")
+        self.send_button = QPushButton()
+        self.send_button.setIcon(self._icon("send"))
+        self.send_button.setIconSize(QSize(20, 20))
         self.send_button.setObjectName("sendButton")
         self.send_button.setAccessibleName("Enviar mensagem")
         self.send_button.setFixedSize(42, 42)
@@ -626,19 +942,35 @@ class NoiteWindow(QMainWindow):
         self.cancel_button.clicked.connect(self.cancel_generation)
         self.cancel_button.hide()
         compose.addWidget(self.input, 1)
-        self.attach_button = QPushButton("Anexar")
+        self.attach_button = QPushButton()
         self.attach_button.setObjectName("ghostButton")
+        self.attach_button.setIcon(self._icon("paperclip"))
+        self.attach_button.setIconSize(QSize(18, 18))
+        self.attach_button.setFixedSize(38, 38)
+        self.attach_button.setToolTip("Anexar arquivos")
+        self.attach_button.setAccessibleName("Anexar arquivos")
         self.attach_button.clicked.connect(self._choose_attachments)
         compose.addWidget(self.attach_button)
         compose.addWidget(self.send_button)
         compose.addWidget(self.cancel_button)
         composer_layout.addLayout(compose)
-        layout.addWidget(composer)
-        footer = QLabel(
-            "Enter envia  ·  Shift+Enter quebra linha  ·  Ferramentas MCP exigem aprovação"
-        )
+        self.composer = composer
+        layout.removeWidget(composer)
+        self.composer_head.hide()
+        self.input.setFixedHeight(54)
+        welcome_layout.insertWidget(6, composer)
+        footer = QLabel("Noite 2.0 — Seu assistente de desenvolvimento")
         footer.setObjectName("footerHint")
-        layout.addWidget(footer)
+        footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        footer_dot = QLabel()
+        footer_dot.setObjectName("footerDot")
+        footer_dot.setFixedSize(8, 8)
+        footer_row = QHBoxLayout()
+        footer_row.addStretch(1)
+        footer_row.addWidget(footer_dot)
+        footer_row.addWidget(footer)
+        footer_row.addStretch(1)
+        layout.addLayout(footer_row)
         content_area = QWidget()
         content_layout = QHBoxLayout(content_area)
         content_layout.setContentsMargins(0, 0, 0, 0)
@@ -649,10 +981,14 @@ class NoiteWindow(QMainWindow):
         self.context_panel = ContextActivityPanel()
         self.main_pane = main
         self.context_panel.close_requested.connect(self._toggle_context_panel)
-        activity_visible = self.preferences.value("panels/activity_visible", False, type=bool)
-        activity_visible = activity_visible or self._progress_mode == "always"
-        self.context_panel.setVisible(activity_visible)
+        context_visible = (
+            self._context_panel_preference
+            and self.width() >= UI_TOKENS["layout"]["panel_breakpoint"]
+        )
+        self._context_panel_user_open = False
+        self.context_panel.setVisible(context_visible)
         content_layout.addWidget(self.context_panel)
+        self._sync_context_panel_button()
         shell.addWidget(content_area, 1)
         self.setCentralWidget(root)
         self.project_dock = ProjectDock(self)
@@ -664,16 +1000,31 @@ class NoiteWindow(QMainWindow):
         self.project_dock.active_file_changed.connect(self._set_active_file_context)
         self.project_dock.activity.connect(self._record_activity)
         self.context_panel.set_model(self.settings.local_model, "Estado sendo verificado")
+        self.context_panel.set_reference_context(self.client.contexto())
+        self.context_panel.highlight_requested.connect(self._show_about)
+        self.context_panel.details_requested.connect(self._open_project)
+        for tool_name, tool_button in self.context_panel.tool_buttons.items():
+            if tool_name == "Executar Comando":
+                tool_button.clicked.connect(self._toggle_terminal)
+            elif tool_name == "Abrir Arquivo":
+                tool_button.clicked.connect(self._choose_attachments)
+            else:
+                tool_button.setEnabled(False)
+                tool_button.setToolTip("Esta ferramenta ainda não está conectada à aplicação.")
         if self.project_dock.workspace is not None:
             self._update_project_context_status(str(self.project_dock.workspace))
             self._refresh_active_file_context()
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.project_dock)
         self.project_dock.hide()
         self._build_terminal_dock()
+        install_auto_hide_scrollbars(self)
+        self.chat.verticalScrollBar().valueChanged.connect(self._chat_scroll_changed)
+        self.chat.verticalScrollBar().sliderPressed.connect(self._stop_chat_follow)
         self._apply_theme(self._theme_mode)
         QGuiApplication.styleHints().colorSchemeChanged.connect(self._system_theme_changed)
         self.command_palette = CommandPalette(self._palette_actions, self)
         self.command_palette.set_theme(self._resolved_theme)
+        install_auto_hide_scrollbars(self.command_palette)
         self._palette_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
         self._palette_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         self._palette_shortcut.activated.connect(self._open_command_palette)
@@ -681,14 +1032,22 @@ class NoiteWindow(QMainWindow):
     def _update_project_context_status(self, path: str) -> None:
         workspace = Path(path)
         self.context_panel.set_project(workspace.name)
+        set_reference_context = getattr(self.context_panel, "set_reference_context", None)
+        if set_reference_context is not None:
+            set_reference_context(
+                {
+                    "project": workspace.name,
+                    "directory": str(workspace),
+                }
+            )
         if self.settings.off_grid:
-            self.composer_project_label.setText(f"▱   {workspace.name} · contexto local")
+            self.composer_project_label.setText(f"{workspace.name} · contexto local")
             self.composer_project_label.setToolTip(
                 "Trechos relevantes e a aba ativa podem ser enviados ao modelo local. "
                 "Nenhum arquivo é alterado automaticamente."
             )
         else:
-            self.composer_project_label.setText(f"▱   {workspace.name} · contexto desativado")
+            self.composer_project_label.setText(f"{workspace.name} · contexto desativado")
             self.composer_project_label.setToolTip(
                 "O contexto do projeto fica desativado quando o modo off-grid está desligado."
             )
@@ -701,46 +1060,114 @@ class NoiteWindow(QMainWindow):
         self._set_active_file_context(snapshot[0] if snapshot else None)
 
     def _toggle_sidebar(self, _checked: bool = False) -> None:
-        self._sidebar_expanded = not self._sidebar_expanded
-        self.sidebar.setVisible(self._sidebar_expanded)
-        self.icon_rail.setFixedWidth(0 if self._sidebar_expanded else 54)
-        self.icon_rail.setVisible(not self._sidebar_expanded)
-        self.expand_sidebar_button.setVisible(not self._sidebar_expanded)
-        label = "Recolher navegação" if self._sidebar_expanded else "Expandir navegação"
-        glyph = "‹" if self._sidebar_expanded else "›"
+        expanding = not self._sidebar_expanded
+        self._sidebar_expanded = expanding
+        self.icon_rail.setVisible(not expanding)
+        self.expand_sidebar_button.setVisible(not expanding)
+        label = "Recolher navegação" if expanding else "Expandir navegação"
+        glyph = "‹" if expanding else "›"
         for button in (self.collapse_sidebar_button, self.expand_sidebar_button):
             button.setText(glyph)
             button.setToolTip(label)
             button.setAccessibleName(label)
+        layout_tokens = UI_TOKENS["layout"]
+        target = max(
+            layout_tokens["sidebar_min_width"],
+            min(
+                layout_tokens["sidebar_max_width"],
+                round(self.width() * layout_tokens["sidebar_ratio"]),
+            ),
+        )
+        self._animate_width(self.sidebar, expanding, target)
 
     def _toggle_context_panel(self, _checked: bool = False) -> None:
-        if self.context_panel.isHidden():
-            self.context_panel.show()
-            self.activity_toggle_button.setText("Fechar painel")
+        opening = self.context_panel.isHidden()
+        self._context_panel_user_open = (
+            opening and self.width() < UI_TOKENS["layout"]["panel_breakpoint"]
+        )
+        self._context_panel_preference = opening
+        self.preferences.setValue("panels/context_visible", opening)
+        self._animate_width(
+            self.context_panel,
+            opening,
+            min(
+                UI_TOKENS["layout"]["panel_max_width"],
+                max(
+                    UI_TOKENS["layout"]["panel_min_width"],
+                    round(self.width() * UI_TOKENS["layout"]["panel_ratio"]),
+                ),
+            ),
+        )
+        self._sync_context_panel_button()
+
+    def _animations_enabled(self) -> bool:
+        if QGuiApplication.platformName() == "offscreen":
+            return False
+        if sys.platform == "win32":
+            enabled = ctypes.c_int()
+            try:
+                if ctypes.windll.user32.SystemParametersInfoW(
+                    0x1042, 0, ctypes.byref(enabled), 0
+                ):
+                    return bool(enabled.value)
+            except (AttributeError, OSError):
+                pass
+        try:
+            return QApplication.isEffectEnabled(Qt.UIEffect.UI_AnimateMenu)
+        except (AttributeError, TypeError):
+            return True
+
+    def _animate_width(self, widget: QWidget, opening: bool, width: int) -> None:
+        animation_name = (
+            "_panel_width_animation"
+            if widget is self.context_panel
+            else "_sidebar_width_animation"
+        )
+        previous = getattr(self, animation_name, None)
+        if previous is not None:
+            previous.stop()
+        widget.setMinimumWidth(0)
+        if not self._animations_enabled():
+            widget.setVisible(opening)
+            widget.setMaximumWidth(width if opening else 0)
+            self._sync_context_panel_button()
+            return
+        if opening:
+            widget.setMinimumWidth(0)
+            widget.setMaximumWidth(0)
+            widget.show()
+        animation = QPropertyAnimation(widget, b"maximumWidth", self)
+        animation.setDuration(UI_TOKENS["motion"]["sidebar_panel_ms"])
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.setStartValue(widget.width() if not opening else 0)
+        animation.setEndValue(width if opening else 0)
+        if not opening:
+            animation.finished.connect(widget.hide)
+            animation.finished.connect(self._sync_context_panel_button)
         else:
-            self.context_panel.hide()
-            self.activity_toggle_button.setText("Atividade")
-        self.preferences.setValue("panels/activity_visible", not self.context_panel.isHidden())
+            animation.finished.connect(lambda: widget.setMinimumWidth(width))
+            if widget is self.context_panel:
+                animation.finished.connect(self._sync_context_panel_button)
+        setattr(self, animation_name, animation)
+        animation.start()
+
+    def _sync_context_panel_button(self) -> None:
+        if not hasattr(self, "activity_toggle_button"):
+            return
+        is_open = not self.context_panel.isHidden()
+        label = "Fechar painel" if is_open else "Abrir painel"
+        self.activity_toggle_button.setText(label)
+        self.activity_toggle_button.setToolTip(label)
+        self.activity_toggle_button.setAccessibleName(label)
 
     def _record_activity(self, event: object) -> None:
-        self.context_panel.add_event(event)
         state = getattr(event, "state", "")
-        if (
-            state == "started"
-            and self._progress_mode == "during_generation"
-            and self.context_panel.isHidden()
-        ):
-            self.context_panel.show()
-            self._progress_auto_opened = True
-            self.activity_toggle_button.setText("Fechar painel")
-        if (
-            state in {"completed", "failed", "cancelled"}
-            and not self.context_panel.has_active_operations
-            and self._progress_auto_opened
-        ):
-            self.context_panel.hide()
-            self._progress_auto_opened = False
-            self.activity_toggle_button.setText("Atividade")
+        self.progress.setText({
+            "started": "Pensando…",
+            "completed": "Resposta recebida",
+            "failed": "Falha na operação",
+            "cancelled": "Operação cancelada",
+        }.get(state, "Pronta"))
         if str(getattr(event, "operation", "")).startswith("Chamada ao modelo"):
             label = {
                 "started": "Em andamento",
@@ -790,10 +1217,10 @@ class NoiteWindow(QMainWindow):
             ),
             CommandAction(
                 "toggle-context",
-                "Mostrar ou ocultar atividade",
+                "Abrir ou fechar painel",
                 "Abrir o contexto e as operações recentes",
                 self._toggle_context_panel,
-                ("contexto", "atividade"),
+                ("painel", "contexto"),
             ),
             CommandAction(
                 "toggle-terminal",
@@ -817,7 +1244,7 @@ class NoiteWindow(QMainWindow):
                 ("configurações", "modelo", "endereço", "url"),
             ),
         ]
-        if self._ollama_was_down and ollama_binary() is not None:
+        if self._ollama_was_down and self.client.ollama_available():
             actions.append(
                 CommandAction(
                     "start-ollama",
@@ -856,19 +1283,23 @@ class NoiteWindow(QMainWindow):
         )
         self.setStyleSheet(LIGHT_THEME if light else DARK_THEME)
         self._resolved_theme = "light" if light else "dark"
+        if hasattr(self, "chat"):
+            self.chat.document().setDefaultStyleSheet(chat_document_styles(self._resolved_theme))
         if hasattr(self, "command_palette"):
             self.command_palette.set_theme(self._resolved_theme)
         self.preferences.setValue("appearance/theme", self._theme_mode)
 
-    def _apply_sidebar_position(self, position: str) -> None:
+    def _apply_sidebar_position(self, position: str, *, persist: bool = True) -> None:
         position = position if position in {"left", "right", "top"} else "left"
         self._sidebar_position = position
-        self.preferences.setValue("appearance/sidebar", position)
+        if persist:
+            self.preferences.setValue("appearance/sidebar", position)
         self.shell_layout.removeWidget(self.sidebar)
         if position == "top":
             self.shell_layout.setDirection(QBoxLayout.Direction.TopToBottom)
             self.side_layout.setDirection(QBoxLayout.Direction.LeftToRight)
             self.sidebar.setMinimumWidth(0)
+            self.sidebar.setMaximumWidth(16777215)
             self.sidebar.setMaximumHeight(148)
             self.sidebar.setMinimumHeight(120)
             self.conversation_list.setMaximumWidth(190)
@@ -879,7 +1310,8 @@ class NoiteWindow(QMainWindow):
         else:
             self.shell_layout.setDirection(QBoxLayout.Direction.LeftToRight)
             self.side_layout.setDirection(QBoxLayout.Direction.TopToBottom)
-            self.sidebar.setMinimumWidth(270)
+            self.sidebar.setMinimumWidth(UI_TOKENS["layout"]["sidebar_min_width"])
+            self.sidebar.setMaximumWidth(UI_TOKENS["layout"]["sidebar_max_width"])
             self.sidebar.setMaximumHeight(16777215)
             self.conversation_list.setMaximumWidth(16777215)
             self.conversation_list.setMaximumHeight(16777215)
@@ -927,17 +1359,6 @@ class NoiteWindow(QMainWindow):
         sidebar_input.addItem("Superior", "top")
         sidebar_index = sidebar_input.findData(self._sidebar_position)
         sidebar_input.setCurrentIndex(max(0, sidebar_index))
-        activity_input = QCheckBox("Manter painel de atividade visível")
-        activity_input.setChecked(not self.context_panel.isHidden())
-        progress_input = QComboBox()
-        progress_input.addItem("Recolhido até abrir manualmente", "collapsed")
-        progress_input.addItem("Expandir durante operações", "during_generation")
-        progress_input.addItem("Sempre visível", "always")
-        progress_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        progress_input.setMinimumWidth(0)
-        progress_input.setCurrentIndex(
-            max(0, progress_input.findData(self._progress_mode))
-        )
         advanced_terminal_input = QCheckBox("Permitir comandos arbitrários no terminal")
         advanced_terminal_input.setChecked(self._terminal_advanced)
         endpoint_input.setPlaceholderText("http://127.0.0.1:11434")
@@ -954,14 +1375,6 @@ class NoiteWindow(QMainWindow):
         model_group = QGroupBox("Modelo e IA")
         model_group.setLayout(model_form)
         settings_layout.addWidget(model_group)
-
-        progress_form = QFormLayout()
-        progress_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        progress_form.addRow("Painel de atividade", activity_input)
-        progress_form.addRow("Exibição do progresso", progress_input)
-        progress_group = QGroupBox("Progresso da operação")
-        progress_group.setLayout(progress_form)
-        settings_layout.addWidget(progress_group)
 
         terminal_group = QGroupBox("Terminal")
         terminal_layout = QVBoxLayout(terminal_group)
@@ -990,6 +1403,7 @@ class NoiteWindow(QMainWindow):
         settings_layout.addStretch(1)
         settings_scroll.setWidget(settings_content)
         layout.addWidget(settings_scroll, 1)
+        install_auto_hide_scrollbars(dialog)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
@@ -1001,15 +1415,6 @@ class NoiteWindow(QMainWindow):
 
         self._apply_theme(str(theme_input.currentData()))
         self._apply_sidebar_position(str(sidebar_input.currentData()))
-        self._progress_mode = str(progress_input.currentData())
-        self.preferences.setValue("panels/progress_mode", self._progress_mode)
-        show_activity = activity_input.isChecked() or self._progress_mode == "always"
-        self.context_panel.setVisible(show_activity)
-        self._progress_auto_opened = False
-        self.activity_toggle_button.setText(
-            "Fechar painel" if show_activity else "Atividade"
-        )
-        self.preferences.setValue("panels/activity_visible", show_activity)
         self._terminal_advanced = advanced_terminal_input.isChecked()
         self.preferences.setValue("terminal/advanced", self._terminal_advanced)
         if open_mcp_after_save:
@@ -1287,13 +1692,29 @@ class NoiteWindow(QMainWindow):
             self.terminal_cancel_button.setEnabled(False)
 
     @staticmethod
-    def _nav_button(text: str, accessible_name: str) -> QPushButton:
+    def _icon(name: str) -> QIcon:
+        return QIcon(str(Path(__file__).resolve().parents[2] / "assets" / "icons" / f"{name}.svg"))
+
+    @staticmethod
+    def _nav_button(
+        text: str, accessible_name: str, icon_name: str | None = None
+    ) -> QPushButton:
         button = QPushButton(text)
         button.setObjectName("navButton")
+        if icon_name:
+            button.setIcon(NoiteWindow._icon(icon_name))
+            button.setIconSize(QSize(22, 22))
         button.setToolTip(accessible_name)
         button.setAccessibleName(accessible_name)
         button.setMinimumHeight(38)
         return button
+
+    def _show_about(self) -> None:
+        QMessageBox.information(
+            self,
+            "Noite 2.0",
+            "Assistente de desenvolvimento local. Seus dados permanecem no seu ambiente.",
+        )
 
     @staticmethod
     def _rail_button(text: str, accessible_name: str) -> QToolButton:
@@ -1311,54 +1732,77 @@ class NoiteWindow(QMainWindow):
         label.setObjectName("sectionLabel")
         layout.addWidget(label)
 
-    _BUBBLE_TEMPLATE = (
-        '<table width="100%" cellspacing="0" cellpadding="4"><tr><td align="{align}">'
-        '<table cellspacing="0" cellpadding="9" width="{width}"><tr><td bgcolor="{bg}">'
-        '<p style="margin:0 0 6px"><b style="color:{name_color}; font-size:11px">{name}</b></p>'
-        '<p style="margin:0; color:#ece9fb; font-size:13px">{body}</p>'
-        "</td></tr></table></td></tr></table>"
-    )
-
     @classmethod
-    def _bubble_html(cls, role: str, content: str) -> str:
-        if role == "user":
-            body = html.escape(content).replace("\n", "<br>")
-            return cls._BUBBLE_TEMPLATE.format(
-                align="right", width="76%", bg="#312a52", name="Você", name_color="#9bb8eb",
-                body=body,
-            )
+    def _bubble_html(cls, role: str, content: str, max_width: int | None = None) -> str:
+        max_width = max_width or UI_TOKENS["layout"]["message_max_width"]
+        user_message = role == "user"
+        name = "Você" if user_message else "Noite"
         body = cls._markdown_to_html(content)
-        return cls._BUBBLE_TEMPLATE.format(
-            align="left", width="88%", bg="#1f1a38", name="Noite", name_color="#b9a8ff",
-            body=body,
+        class_name = "message-user" if user_message else "message-assistant"
+        name_class = "message-name message-user-name" if user_message else "message-name"
+        return (
+            '<table width="100%" cellspacing="0" cellpadding="0"><tr><td align="center">'
+            f'<table width="{max(240, min(760, max_width))}" cellspacing="0" cellpadding="0">'
+            f'<tr><td><div class="{class_name}"><p class="{name_class}">{name}</p>'
+            f'<div class="message-body">{body}</div></div></td></tr></table>'
+            "</td></tr></table>"
         )
 
     @staticmethod
     def _markdown_to_html(content: str) -> str:
         safe = html.escape(content)
-        blocks = re.split(r"```[a-zA-Z0-9_-]*\n?", safe)
+        blocks = re.split(r"```[a-zA-Z0-9_+-]*\n?(.*?)```", safe, flags=re.DOTALL)
         rendered: list[str] = []
         for index, block in enumerate(blocks):
             if index % 2 == 1:
-                rendered.append(f"<pre style='background-color:#12102a'>{block}</pre>")
+                clipboard = base64.urlsafe_b64encode(html.unescape(block).encode("utf-8"))
+                rendered.append(
+                    f'<pre><code>{block}</code></pre><a href="copy:{clipboard.decode()}" '
+                    'class="copy-code">Copiar</a>'
+                )
                 continue
-            block = block.replace("`", "<code>")
+            block = re.sub(r"`([^`]+)`", r"<code>\1</code>", block)
             block = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", block)
-            rendered.append(block)
-        return "".join(rendered).replace("\n", "<br>") if not rendered else "".join(rendered)
+            lines = block.splitlines()
+            for line in lines:
+                if line.startswith("&gt; "):
+                    rendered.append(f"<blockquote>{line[5:]}</blockquote>")
+                elif line:
+                    rendered.append(f"<p>{line}</p>")
+        return "".join(rendered)
 
     def _append_message(self, role: str, content: str) -> None:
         self._messages.append((role, content))
         self._show_chat()
-        self.chat.append(self._bubble_html(role, content))
+        self.chat.append(
+            self._bubble_html(role, content, self.chat.viewport().width() - 32)
+        )
+        self._animate_chat_message()
+        if getattr(self, "_follow_chat_tail", True):
+            self._scroll_chat_to_tail()
 
     def _show_chat(self) -> None:
         if getattr(self, "welcome", None) is not None and not self.welcome.isHidden():
             self.welcome.hide()
             self.chat.show()
+            self._place_composer_in_conversation()
+
+    def _place_composer_in_conversation(self) -> None:
+        self.welcome_layout.removeWidget(self.composer)
+        self.main_layout.removeWidget(self.composer)
+        self.composer_head.show()
+        self.input.setFixedHeight(74)
+        self.main_layout.insertWidget(self.main_layout.count() - 1, self.composer)
+
+    def _place_composer_in_welcome(self) -> None:
+        self.main_layout.removeWidget(self.composer)
+        self.welcome_layout.removeWidget(self.composer)
+        self.composer_head.hide()
+        self.input.setFixedHeight(54)
+        self.welcome_layout.insertWidget(6, self.composer)
 
     def _load_history(self) -> None:
-        messages = self.service.history(self.conversation_id, limit=50)
+        messages = self.client.history(self.conversation_id, limit=50)
         self._messages = [(str(role), str(content)) for role, content in messages]
         self._render_chat()
 
@@ -1366,18 +1810,21 @@ class NoiteWindow(QMainWindow):
         self._render_scheduled = False
         scrollbar = self.chat.verticalScrollBar()
         follow_tail = scrollbar.value() >= scrollbar.maximum() - 2
+        self._follow_chat_tail = follow_tail
         prior_scroll = scrollbar.value()
         if not self._messages:
             self.chat.clear()
             self.chat.hide()
             self.welcome.show()
+            self._place_composer_in_welcome()
             return
         self._show_chat()
         self.chat.clear()
+        width = self.chat.viewport().width() - 32
         for role, content in self._messages:
-            self.chat.append(self._bubble_html(role, content))
+            self.chat.append(self._bubble_html(role, content, width))
         if follow_tail:
-            scrollbar.setValue(scrollbar.maximum())
+            QTimer.singleShot(0, self._scroll_chat_to_tail)
         else:
             scrollbar.setValue(min(prior_scroll, scrollbar.maximum()))
 
@@ -1389,12 +1836,13 @@ class NoiteWindow(QMainWindow):
 
 
     def _refresh_conversation_list(self, select_id: str | None = None) -> None:
-        conversations = self.service.conversations()
+        conversations = self.client.sessoes()
         self.conversation_list.blockSignals(True)
         self.conversation_list.clear()
         selected = None
         for conversation_id, title, _updated_at in conversations:
             item = QListWidgetItem(title)
+            item.setIcon(self._icon("chat"))
             item.setData(Qt.UserRole, conversation_id)
             item.setToolTip(title)
             self.conversation_list.addItem(item)
@@ -1405,6 +1853,20 @@ class NoiteWindow(QMainWindow):
         self.conversation_list.blockSignals(False)
         self.rename_conversation_button.setEnabled(selected is not None)
         self.delete_conversation_button.setEnabled(selected is not None)
+
+    def _show_conversation_menu(self, position) -> None:
+        item = self.conversation_list.itemAt(position)
+        if item is None:
+            return
+        self.conversation_list.setCurrentItem(item)
+        menu = QMenu(self)
+        rename = menu.addAction("Renomear")
+        delete = menu.addAction("Excluir")
+        selected = menu.exec(self.conversation_list.mapToGlobal(position))
+        if selected is rename:
+            self.rename_current_conversation()
+        elif selected is delete:
+            self.delete_current_conversation()
 
     def _conversation_selected(
         self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
@@ -1430,7 +1892,7 @@ class NoiteWindow(QMainWindow):
             )
             return
         try:
-            self.service.set_active_conversation(conversation_id)
+            self.client.set_active_conversation(conversation_id)
         except ValueError:
             self._refresh_conversation_list(self.conversation_id)
             return
@@ -1444,7 +1906,7 @@ class NoiteWindow(QMainWindow):
                 self, "Geração em andamento", "Aguarde ou cancele a geração antes de continuar."
             )
             return
-        conversation_id = self.service.create_conversation()
+        conversation_id = self.client.create_conversation()
         self.conversation_id = conversation_id
         self._refresh_conversation_list(conversation_id)
         self._load_history()
@@ -1460,7 +1922,7 @@ class NoiteWindow(QMainWindow):
         if not accepted:
             return
         try:
-            renamed = self.service.rename_conversation(str(item.data(Qt.UserRole)), title)
+            renamed = self.client.rename_conversation(str(item.data(Qt.UserRole)), title)
         except ValueError as exc:
             QMessageBox.warning(self, "Título inválido", str(exc))
             return
@@ -1483,7 +1945,7 @@ class NoiteWindow(QMainWindow):
             != QMessageBox.Yes
         ):
             return
-        active_id = self.service.delete_conversation(conversation_id)
+        active_id = self.client.delete_conversation(conversation_id)
         if active_id is not None:
             self.conversation_id = active_id
             self._refresh_conversation_list(active_id)
@@ -1494,7 +1956,7 @@ class NoiteWindow(QMainWindow):
             return
         self._status_running = True
         self._start_worker(
-            lambda _worker: self.service.model_diagnostics(),
+            lambda _worker: self.client.model_diagnostics(),
             completed=self._show_model_diagnostics,
             failed=self._status_check_failed,
         )
@@ -1554,7 +2016,7 @@ class NoiteWindow(QMainWindow):
         self.ollama_banner_text.setText(
             message if message else "Ollama indisponível."
         )
-        self.ollama_start_button.setVisible(show_banner and ollama_binary() is not None)
+        self.ollama_start_button.setVisible(show_banner and self.client.ollama_available())
         self.ollama_start_button.setEnabled(True)
         installed = data.get("installed_models")
         if server == "up" and isinstance(installed, list):
@@ -1635,7 +2097,7 @@ class NoiteWindow(QMainWindow):
         def update() -> None:
             status.setText("Consultando /api/tags no endpoint Ollama configurado…")
             self._start_worker(
-                lambda _worker: self.service.model_diagnostics(),
+                lambda _worker: self.client.model_diagnostics(),
                 completed=lambda result: receive(result),
                 failed=lambda message: status.setText(message),
             )
@@ -1752,7 +2214,7 @@ class NoiteWindow(QMainWindow):
         dialog.exec()
 
     def _start_ollama_clicked(self) -> None:
-        started = start_ollama_server(Path(self.settings.data_dir) / "logs")
+        started = self.client.iniciar_ollama(Path(self.settings.data_dir) / "logs")
         if not started:
             QMessageBox.warning(
                 self,
@@ -1788,6 +2250,7 @@ class NoiteWindow(QMainWindow):
         failed: Callable[[str], None] | None = None,
         cancelled: Callable[[], None] | None = None,
         streamed: Callable[[str], None] | None = None,
+        thinking_streamed: Callable[[str], None] | None = None,
         finished: Callable[[], None] | None = None,
     ) -> TaskThread:
         worker = None
@@ -1801,6 +2264,8 @@ class NoiteWindow(QMainWindow):
             worker.cancelled.connect(cancelled)
         if streamed is not None:
             worker.streamed.connect(streamed)
+        if thinking_streamed is not None:
+            worker.thinking_streamed.connect(thinking_streamed)
         worker.activity.connect(self._record_activity)
         worker.finished.connect(lambda current=worker: self._worker_finished(current))
         if finished is not None:
@@ -1856,19 +2321,26 @@ class NoiteWindow(QMainWindow):
         self._set_conversation_controls_enabled(False)
         self.progress.setText("A Noite está pensando…")
         model = self.model_box.currentText().strip() or self.settings.local_model
-        service = AssistantService(self.settings, model=model)
-        self.service = service
+        if isinstance(self.client, ServiceClient):
+            self.client.set_model(model)
         self._streaming_response_active = False
         self._streaming_response_text = ""
+        self._pending_stream_chunks.clear()
+        self._stream_flush_timer.stop()
+        self._thinking_text = ""
+        self._thinking_started_at = None
+        self.thinking_panel.hide()
+        self.thinking_text_label.clear()
         self.cancel_button.setEnabled(True)
         self.cancel_button.show()
         workspace = self.project_dock.workspace
         active_snapshot = self.project_dock.active_document_snapshot()
         self.worker = self._start_worker(
-            lambda worker: service.respond(
+            lambda worker: self.client.enviar(
                 model_text,
                 conversation_id=conversation_id,
                 on_chunk=worker.streamed.emit,
+                on_thinking=worker.thinking_streamed.emit,
                 on_activity=worker.activity.emit,
                 project_root=workspace,
                 active_file=active_snapshot[0] if active_snapshot else None,
@@ -1878,25 +2350,47 @@ class NoiteWindow(QMainWindow):
             failed=self._on_error,
             cancelled=self._on_cancelled,
             streamed=self._on_stream_chunk,
+            thinking_streamed=self._on_thinking_chunk,
             finished=self._generation_finished,
         )
+        if isinstance(self.client, ServiceClient) and self.worker is not None:
+            self.client.bind_stop(self.worker.request_cancel)
 
     def _generation_finished(self) -> None:
         self.send_button.setEnabled(True)
         self._refresh_conversation_list(self.conversation_id)
         self._set_conversation_controls_enabled(True)
         self.cancel_button.hide()
+        if isinstance(self.client, ServiceClient):
+            self.client.bind_stop(None)
 
     def cancel_generation(self) -> None:
         if self.worker is None or not self.worker.isRunning():
             return
         self.cancel_button.setEnabled(False)
         self.progress.setText("Cancelando geração…")
+        self.client.parar()
         self.worker.request_cancel()
 
     def _on_stream_chunk(self, chunk: str) -> None:
+        if not hasattr(self, "_pending_stream_chunks"):
+            self._pending_stream_chunks = []
+        self._pending_stream_chunks.append(chunk)
+        if hasattr(self, "_stream_flush_timer"):
+            if not self._stream_flush_timer.isActive():
+                self._stream_flush_timer.start()
+            return
+        self._flush_stream_chunks()
+
+    def _flush_stream_chunks(self) -> None:
+        if not self._pending_stream_chunks:
+            return
+        chunk = "".join(self._pending_stream_chunks)
+        self._pending_stream_chunks.clear()
         scrollbar = self.chat.verticalScrollBar()
-        follow_response = scrollbar.value() >= scrollbar.maximum() - 2
+        follow_response = getattr(
+            self, "_follow_chat_tail", scrollbar.value() >= scrollbar.maximum() - 2
+        )
         previous_scroll = scrollbar.value()
         if not self._streaming_response_active:
             self._streaming_response_active = True
@@ -1910,11 +2404,13 @@ class NoiteWindow(QMainWindow):
                 )
             )
             self._show_chat()
+            self._animate_chat_message()
             cursor = self.chat.textCursor()
             cursor.movePosition(QTextCursor.MoveOperation.End)
             if not self.chat.document().isEmpty():
                 cursor.insertBlock()
-            cursor.insertText("Noite\n")
+            cursor.insertHtml('<p class="message-name">Noite</p><p class="message-body">')
+            cursor.insertBlock()
             self.chat.setTextCursor(cursor)
         self._streaming_response_text += chunk
         messages = getattr(self, "_messages", None)
@@ -1928,12 +2424,164 @@ class NoiteWindow(QMainWindow):
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertText(chunk)
         self.chat.setTextCursor(cursor)
-        if follow_response:
-            self.chat.ensureCursorVisible()
-        else:
+        if not follow_response:
             scrollbar.setValue(previous_scroll)
+        else:
+            self._scroll_chat_to_tail()
+
+    def _on_thinking_chunk(self, chunk: str) -> None:
+        if not chunk:
+            return
+        first_chunk = self._thinking_started_at is None
+        if first_chunk:
+            self._thinking_started_at = perf_counter()
+            self._thinking_text = ""
+            self.thinking_title.setText("Pensamento")
+            self.thinking_text_label.show()
+        self._thinking_text += chunk
+        self.thinking_text_label.setText(self._thinking_text)
+        if first_chunk:
+            self._set_thinking_expanded(True)
+
+    def _set_thinking_expanded(self, expanded: bool) -> None:
+        self._thinking_expanded = expanded
+        self.thinking_toggle.setIcon(self._icon("chevron-up" if expanded else "chevron-down"))
+        self.thinking_toggle.setAccessibleName(
+            "Recolher pensamento" if expanded else "Expandir pensamento"
+        )
+        collapsed_height = self.thinking_title.sizeHint().height() + 20
+        if expanded:
+            self.thinking_text_label.show()
+            self.thinking_panel.show()
+            self.thinking_panel.adjustSize()
+            target = min(
+                UI_TOKENS["layout"]["thinking_max_height"],
+                self.thinking_panel.sizeHint().height(),
+            )
+            start = max(collapsed_height, self.thinking_panel.height())
+        else:
+            target = collapsed_height
+            start = max(target, self.thinking_panel.height())
+        animation = getattr(self, "_thinking_animation", None)
+        if animation is not None:
+            animation.stop()
+        if not self._animations_enabled():
+            self.thinking_panel.setMaximumHeight(target)
+            self.thinking_text_label.setVisible(expanded)
+            self.thinking_panel.setVisible(bool(self._thinking_text))
+            return
+        animation = QPropertyAnimation(self.thinking_panel, b"maximumHeight", self)
+        animation.setDuration(UI_TOKENS["motion"]["thinking_ms"])
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.setStartValue(start)
+        animation.setEndValue(target)
+        if not expanded:
+            animation.finished.connect(self.thinking_text_label.hide)
+        self._thinking_animation = animation
+        animation.start()
+
+    def _toggle_thinking_panel(self) -> None:
+        self._set_thinking_expanded(not getattr(self, "_thinking_expanded", True))
+
+    def _finish_thinking(self) -> None:
+        if self._thinking_started_at is None:
+            self.thinking_panel.hide()
+            return
+        elapsed = max(0, round(perf_counter() - self._thinking_started_at))
+        self.thinking_title.setText(f"Pensou por {elapsed} s")
+        self._set_thinking_expanded(False)
+
+    def _chat_scroll_changed(self, value: int) -> None:
+        if getattr(self, "_auto_scroll_active", False):
+            return
+        scrollbar = self.chat.verticalScrollBar()
+        self._follow_chat_tail = value >= scrollbar.maximum() - 2
+
+    def _stop_chat_follow(self) -> None:
+        self._follow_chat_tail = False
+        animation = getattr(self, "_chat_scroll_animation", None)
+        if animation is not None:
+            animation.stop()
+        self._auto_scroll_active = False
+
+    def eventFilter(self, watched, event) -> bool:
+        if (
+            hasattr(self, "chat")
+            and watched is self.chat.viewport()
+            and event.type() == QEvent.Type.Wheel
+        ):
+            QTimer.singleShot(0, self._sync_chat_follow)
+        if watched is getattr(self, "input", None):
+            if event.type() in {QEvent.Type.FocusIn, QEvent.Type.FocusOut}:
+                self.composer.setProperty("focused", event.type() == QEvent.Type.FocusIn)
+                self.composer.style().unpolish(self.composer)
+                self.composer.style().polish(self.composer)
+        return super().eventFilter(watched, event)
+
+    def _sync_chat_follow(self) -> None:
+        scrollbar = self.chat.verticalScrollBar()
+        self._follow_chat_tail = scrollbar.value() >= scrollbar.maximum() - 2
+
+    def _scroll_chat_to_tail(self) -> None:
+        scrollbar = self.chat.verticalScrollBar()
+        if not self._animations_enabled():
+            scrollbar.setValue(scrollbar.maximum())
+            return
+        animation = getattr(self, "_chat_scroll_animation", None)
+        if animation is not None:
+            animation.stop()
+        self._auto_scroll_active = True
+        animation = QPropertyAnimation(scrollbar, b"value", self)
+        animation.setDuration(UI_TOKENS["motion"]["scroll_ms"])
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.setStartValue(scrollbar.value())
+        animation.setEndValue(scrollbar.maximum())
+        animation.finished.connect(self._finish_chat_scroll)
+        self._chat_scroll_animation = animation
+        animation.start()
+
+    def _finish_chat_scroll(self) -> None:
+        self._auto_scroll_active = False
+        scrollbar = self.chat.verticalScrollBar()
+        if scrollbar.value() >= scrollbar.maximum() - 2:
+            self._follow_chat_tail = True
+
+    def _animate_chat_message(self) -> None:
+        if not self._animations_enabled():
+            return
+        effect = QGraphicsOpacityEffect(self.chat)
+        effect.setOpacity(0.55)
+        self.chat.setGraphicsEffect(effect)
+        start = self.chat.pos() + QPoint(0, 8)
+        end = self.chat.pos()
+        group = QParallelAnimationGroup(self)
+        opacity = QPropertyAnimation(effect, b"opacity", group)
+        opacity.setStartValue(0.55)
+        opacity.setEndValue(1.0)
+        movement = QPropertyAnimation(self.chat, b"pos", group)
+        movement.setStartValue(start)
+        movement.setEndValue(end)
+        for animation in (opacity, movement):
+            animation.setDuration(UI_TOKENS["motion"]["new_message_ms"])
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            group.addAnimation(animation)
+        group.finished.connect(lambda: self.chat.setGraphicsEffect(None))
+        self._message_animation = group
+        group.start()
+
+    def _handle_chat_link(self, url: QUrl) -> None:
+        if url.scheme() != "copy":
+            return
+        try:
+            encoded = url.toString().partition(":")[2].lstrip("/")
+            text = base64.urlsafe_b64decode(encoded.encode("ascii")).decode("utf-8")
+        except (ValueError, UnicodeError):
+            return
+        QApplication.clipboard().setText(text)
 
     def _on_response(self, response: object) -> None:
+        self._flush_stream_chunks()
+        self._finish_thinking()
         if self._streaming_response_active:
             self._record_activity(
                 make_activity_event(
@@ -1968,6 +2616,8 @@ class NoiteWindow(QMainWindow):
 
 
     def _on_error(self, message: str) -> None:
+        self._flush_stream_chunks()
+        self._finish_thinking()
         if self._streaming_response_active:
             self._record_activity(
                 make_activity_event(
@@ -1982,6 +2632,8 @@ class NoiteWindow(QMainWindow):
         self.progress.setText("A solicitação falhou; você pode tentar novamente.")
 
     def _on_cancelled(self) -> None:
+        self._flush_stream_chunks()
+        self._finish_thinking()
         if self._streaming_response_active:
             self._record_activity(
                 make_activity_event(
@@ -2001,6 +2653,7 @@ class NoiteWindow(QMainWindow):
 
     def _open_mcp_dialog(self) -> None:
         dialog = MCPDialog(self.settings.data_dir, self)
+        install_auto_hide_scrollbars(dialog)
         dialog.activity.connect(self._record_activity)
         dialog.exec()
 
@@ -2011,13 +2664,32 @@ class NoiteWindow(QMainWindow):
             self.input.setEnabled(False)
             self.send_button.setEnabled(False)
             self.cancel_button.setEnabled(False)
-            self.mcp_button.setEnabled(False)
+            mcp_button = getattr(self, "mcp_button", None)
+            if mcp_button is not None:
+                mcp_button.setEnabled(False)
             self.progress.setText("Cancelando as operações para fechar com segurança…")
             for worker in running:
                 worker.request_cancel()
             event.ignore()
             return
+        if hasattr(self, "_stream_flush_timer"):
+            self._stream_flush_timer.stop()
+        for name in (
+            "_panel_width_animation",
+            "_sidebar_width_animation",
+            "_thinking_animation",
+            "_chat_scroll_animation",
+            "_message_animation",
+        ):
+            animation = getattr(self, name, None)
+            if animation is not None:
+                animation.stop()
         event.accept()
+        app = QApplication.instance()
+        if app is not None and getattr(self, "_resize_filter_installed", False):
+            self._window_resize_filter.detach()
+            app.removeEventFilter(self._window_resize_filter)
+            self._resize_filter_installed = False
 
 
 class MCPDialog(QDialog):
@@ -2475,13 +3147,13 @@ class MCPDialog(QDialog):
         event.accept()
 
 
-def run_gui() -> int:
+def run_gui(client: NoiteClient | None = None) -> int:
     app = QApplication.instance() or QApplication([])
     icon_path = Path(__file__).resolve().parents[2] / "assets" / "noite.ico"
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
     settings = get_settings()
     setup_logging(settings.data_dir)
-    window = NoiteWindow()
+    window = NoiteWindow(client=client)
     window.show()
     return app.exec()

@@ -1,166 +1,246 @@
-"""Collapsible session context and real-operation activity feed."""
+"""Context dashboard shown beside the conversation."""
 
 from __future__ import annotations
 
-from time import monotonic
+from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QFontMetrics, QIcon
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QToolButton,
     QVBoxLayout,
+    QWidget,
 )
 
-from .activity import ActivityEvent
+from .theme import UI_TOKENS
+
+
+class MiddleElideLabel(QLabel):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._full_text = ""
+        self.setWordWrap(False)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_full_text(self, text: str) -> None:
+        self._full_text = text
+        self._refresh_text()
+        self.setToolTip(text)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._refresh_text()
+
+    def _refresh_text(self) -> None:
+        self.setText(QFontMetrics(self.font()).elidedText(
+            self._full_text, Qt.TextElideMode.ElideMiddle, max(0, self.width())
+        ))
+
+
+class MinHeightCard(QFrame):
+    def __init__(self, minimum_height: int, parent=None) -> None:
+        super().__init__(parent)
+        self._minimum_height = minimum_height
+
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        return QSize(hint.width(), max(hint.height(), self._minimum_height))
+
+    def minimumSizeHint(self) -> QSize:
+        hint = super().minimumSizeHint()
+        return QSize(hint.width(), max(hint.height(), self._minimum_height))
 
 
 class ContextActivityPanel(QFrame):
     close_requested = Signal()
+    highlight_requested = Signal()
+    details_requested = Signal()
 
-    _STATE_LABELS = {
-        "started": "em andamento",
-        "completed": "concluída",
-        "failed": "falhou",
-        "cancelled": "cancelada",
-    }
-    _STATE_GLYPHS = {
-        "started": "◌",
-        "completed": "✓",
-        "failed": "!",
-        "cancelled": "–",
-    }
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_highlight_layout()
 
-    @property
-    def has_active_operations(self) -> bool:
-        return bool(self._active_operations)
+    def _update_highlight_layout(self) -> None:
+        laptop = getattr(self, "highlight_laptop", None)
+        if laptop is not None:
+            laptop.setVisible(
+                self.width() >= UI_TOKENS["layout"]["highlight_compact_width"]
+            )
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("contextActivityPanel")
-        self.setFixedWidth(292)
-        self._events: dict[str, ActivityEvent] = {}
-        self._active_operations: dict[str, tuple[str, float]] = {}
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 18, 16, 14)
-        layout.setSpacing(10)
+        self.setMinimumWidth(280)
+        self.setMaximumWidth(440)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+        scroll = QScrollArea(self)
+        scroll.setObjectName("activityPanelScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area = scroll
+        content = QWidget()
+        content.setMinimumWidth(0)
+        content.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(8, 10, 8, 8)
+        layout.setSpacing(5)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        scroll.setWidget(content)
+        outer_layout.addWidget(scroll)
 
         header = QHBoxLayout()
-        title = QLabel("Contexto da sessão")
+        icon = QLabel()
+        icon.setPixmap(self._icon("star").pixmap(21, 21))
+        header.addWidget(icon)
+        title = QLabel("Destaques")
         title.setObjectName("contextPanelTitle")
         close = QToolButton()
-        close.setText("×")
-        close.setToolTip("Fechar painel de contexto e atividade")
-        close.setAccessibleName("Fechar painel de contexto e atividade")
+        close.setIcon(self._icon("chevron-right"))
+        close.setIconSize(QSize(18, 18))
+        close.setToolTip("Fechar painel")
+        close.setAccessibleName("Fechar painel")
         close.clicked.connect(self.close_requested)
         header.addWidget(title)
         header.addStretch(1)
         header.addWidget(close)
         layout.addLayout(header)
 
-        self.model_value = self._context_value("Modelo local", "contextModel")
-        layout.addWidget(self.model_value)
-        self.project_value = self._context_value("Nenhum projeto aberto", "contextProject")
-        layout.addWidget(self.project_value)
-        self.file_value = self._context_value("Nenhum arquivo ativo", "contextFile")
-        layout.addWidget(self.file_value)
+        highlights = MinHeightCard(UI_TOKENS["layout"]["highlight_card_min_height"])
+        highlights.setObjectName("highlightCard")
+        highlights.setMinimumWidth(0)
+        highlights.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        highlight_layout = QHBoxLayout(highlights)
+        highlight_layout.setContentsMargins(16, 15, 12, 15)
+        highlight_layout.setSpacing(6)
+        highlight_copy_layout = QVBoxLayout()
+        highlight_copy_layout.setContentsMargins(0, 0, 0, 0)
+        highlight_copy_layout.setSpacing(7)
+        highlight_title = QLabel("Mais foco, mais\nprodutividade.")
+        highlight_title.setObjectName("highlightTitle")
+        highlight_title.setWordWrap(True)
+        highlight_title.setMinimumWidth(0)
+        highlight_copy_layout.addWidget(highlight_title)
+        highlight_copy = QLabel("Use o Noite para automatizar tarefas, pesquisar e criar.")
+        highlight_copy.setObjectName("highlightCopy")
+        highlight_copy.setWordWrap(True)
+        highlight_copy.setMinimumWidth(0)
+        highlight_copy_layout.addWidget(highlight_copy)
+        learn_more = QPushButton("Saiba mais")
+        learn_more.setObjectName("highlightAction")
+        learn_more.clicked.connect(self.highlight_requested)
+        highlight_copy_layout.addWidget(learn_more, 0, Qt.AlignmentFlag.AlignLeft)
+        highlight_layout.addLayout(highlight_copy_layout, 1)
+        laptop = QLabel()
+        laptop.setPixmap(self._icon("laptop-moon").pixmap(92, 48))
+        laptop.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.highlight_laptop = laptop
+        highlight_layout.addWidget(laptop)
+        layout.addWidget(highlights)
+        self._update_highlight_layout()
 
-        self.progress = QLabel("Sem operações em andamento.")
-        self.progress.setObjectName("activityProgress")
-        self.progress.setWordWrap(True)
-        layout.addWidget(self.progress)
+        context_card = MinHeightCard(UI_TOKENS["layout"]["context_card_min_height"])
+        context_card.setObjectName("referenceContextCard")
+        context_card.setMinimumWidth(0)
+        context_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        context_card.setMinimumHeight(UI_TOKENS["layout"]["context_card_min_height"])
+        context_layout = QVBoxLayout(context_card)
+        context_layout.setContentsMargins(15, 6, 15, 6)
+        context_layout.setSpacing(2)
+        context_icon = QLabel()
+        context_icon.setPixmap(self._icon("cube").pixmap(20, 20))
+        context_layout.addWidget(context_icon, 0, Qt.AlignmentFlag.AlignLeft)
+        context_title = QLabel("Contexto Atual")
+        context_title.setObjectName("contextPanelTitle")
+        context_layout.addWidget(context_title)
+        self.reference_project = QLabel("Projeto ativo\n—")
+        self.reference_project.setObjectName("referenceContextValue")
+        context_layout.addWidget(self.reference_project)
+        directory_caption = QLabel("Diretório")
+        directory_caption.setObjectName("referenceContextCaption")
+        context_layout.addWidget(directory_caption)
+        self.reference_directory = MiddleElideLabel()
+        self.reference_directory.setObjectName("referenceContextValue")
+        context_layout.addWidget(self.reference_directory)
+        self.reference_documents = QLabel("Arquivos indexados\n—")
+        self.reference_documents.setObjectName("referenceContextValue")
+        context_layout.addWidget(self.reference_documents)
+        details_button = QPushButton("Ver detalhes")
+        details_button.setObjectName("contextDetailsButton")
+        details_button.setFixedHeight(24)
+        details_button.clicked.connect(self.details_requested)
+        context_layout.addWidget(details_button)
+        layout.addWidget(context_card)
 
-        section = QLabel("Atividade recente")
-        section.setObjectName("contextSection")
-        layout.addWidget(section)
-        self.empty_activity = QLabel("As operações realizadas aparecerão aqui.")
-        self.empty_activity.setObjectName("emptyActivity")
-        self.empty_activity.setWordWrap(True)
-        layout.addWidget(self.empty_activity)
-        self.events = QListWidget()
-        self.events.setObjectName("activityEvents")
-        self.events.setAccessibleName("Atividade recente da Noite")
-        self.events.currentItemChanged.connect(self._show_event_details)
-        layout.addWidget(self.events, 1)
-
-        self._progress_timer = QTimer(self)
-        self._progress_timer.setInterval(1000)
-        self._progress_timer.timeout.connect(self._refresh_progress)
-        self._progress_timer.start()
-
-        self.details_toggle = QToolButton()
-        self.details_toggle.setText("Ver detalhes")
-        self.details_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.details_toggle.setCheckable(True)
-        self.details_toggle.setObjectName("activityDetailsToggle")
-        self.details_toggle.toggled.connect(self._toggle_details)
-        self.details_toggle.hide()
-        layout.addWidget(self.details_toggle, 0, Qt.AlignmentFlag.AlignLeft)
-        self.details = QLabel()
-        self.details.setObjectName("activityDetails")
-        self.details.setWordWrap(True)
-        self.details.hide()
-        layout.addWidget(self.details)
+        tools_card = QFrame()
+        tools_card.setObjectName("referenceToolsCard")
+        tools_card.setMinimumWidth(0)
+        tools_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        tools_layout = QVBoxLayout(tools_card)
+        tools_layout.setContentsMargins(15, 10, 15, 10)
+        tools_layout.setSpacing(2)
+        tools_icon = QLabel()
+        tools_icon.setPixmap(self._icon("wrench").pixmap(20, 20))
+        tools_layout.addWidget(tools_icon, 0, Qt.AlignmentFlag.AlignLeft)
+        tools_title = QLabel("Ferramentas")
+        tools_title.setObjectName("contextPanelTitle")
+        tools_layout.addWidget(tools_title)
+        self.tool_buttons = {}
+        tool_icons = {
+            "Calculadora": "calculator",
+            "Pesquisa na Web": "web",
+            "Executar Comando": "terminal",
+            "Abrir Arquivo": "file",
+        }
+        for name in ("Calculadora", "Pesquisa na Web", "Executar Comando", "Abrir Arquivo"):
+            button = QToolButton()
+            button.setObjectName("referenceToolButton")
+            button.setText(name)
+            button.setIcon(self._icon(tool_icons[name]))
+            button.setIconSize(QSize(18, 18))
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            button.setProperty("toolName", name)
+            button.setMinimumHeight(29)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            tools_layout.addWidget(button)
+            self.tool_buttons[name] = button
+        layout.addSpacing(26)
+        layout.addWidget(tools_card)
 
     @staticmethod
-    def _context_value(text: str, object_name: str) -> QLabel:
-        label = QLabel(text)
-        label.setObjectName(object_name)
-        label.setWordWrap(True)
-        return label
+    def _icon(name: str) -> QIcon:
+        root = Path(__file__).resolve().parents[2]
+        return QIcon(str(root / "assets" / "icons" / f"{name}.svg"))
 
     def set_model(self, model: str, state: str) -> None:
-        self.model_value.setText(f"Modelo · {model}\n{state}")
+        self.setToolTip(f"Modelo local: {model} · {state}")
 
     def set_project(self, name: str, active_file: str | None = None) -> None:
-        self.project_value.setText(f"Projeto · {name}")
-        self.file_value.setText(f"Arquivo relacionado · {active_file or 'nenhum'}")
+        self.reference_project.setText(f"Projeto ativo\n{name}")
+        if active_file:
+            self.reference_project.setToolTip(f"Arquivo relacionado: {active_file}")
+
+    def set_reference_context(self, context: dict[str, object]) -> None:
+        project = str(context.get("project") or context.get("workspace") or "—")
+        directory = str(context.get("directory") or context.get("workspace") or "—")
+        count = context.get("indexed_documents")
+        self.reference_project.setText(f"Projeto ativo\n{project}")
+        self.reference_directory.set_full_text(directory)
+        self.reference_documents.setText(
+            f"Arquivos indexados\n{count} documentos"
+            if count is not None
+            else "Arquivos indexados\n—"
+        )
 
     def set_active_file(self, path: str | None) -> None:
-        self.file_value.setText(f"Arquivo relacionado · {path or 'nenhum'}")
-
-    def add_event(self, event: ActivityEvent) -> None:
-        if event.state == "started":
-            self._active_operations[event.operation] = (event.summary, monotonic())
-        else:
-            self._active_operations.pop(event.operation, None)
-        self._refresh_progress()
-        self.empty_activity.hide()
-        self._events[event.event_id] = event
-        clock = event.occurred_at.strftime("%H:%M:%S")
-        state = self._STATE_LABELS.get(event.state, event.state)
-        glyph = self._STATE_GLYPHS.get(event.state, "·")
-        duration = f" · {event.duration_ms} ms" if event.duration_ms is not None else ""
-        item = QListWidgetItem(f"{glyph}  {event.summary}\n{clock} · {state}{duration}")
-        item.setData(Qt.ItemDataRole.UserRole, event.event_id)
-        item.setToolTip(event.summary)
-        self.events.insertItem(0, item)
-        while self.events.count() > 40:
-            removed = self.events.takeItem(self.events.count() - 1)
-            if removed is not None:
-                self._events.pop(removed.data(Qt.ItemDataRole.UserRole), None)
-        self.events.setCurrentItem(item)
-
-    def _refresh_progress(self) -> None:
-        if not self._active_operations:
-            self.progress.setText("Sem operações em andamento.")
-            return
-        operation, (summary, started) = next(reversed(self._active_operations.items()))
-        elapsed = max(0, int(monotonic() - started))
-        self.progress.setText(f"{summary}\n{operation} · {elapsed} s")
-
-    def _show_event_details(self, current: QListWidgetItem | None, _previous) -> None:
-        event_id = current.data(Qt.ItemDataRole.UserRole) if current is not None else None
-        event = self._events.get(event_id)
-        details = event.details if event and event.details else "Sem detalhes adicionais."
-        self.details.setText(details)
-        self.details_toggle.setVisible(event is not None)
-        self.details_toggle.setChecked(False)
-        self.details.hide()
-
-    def _toggle_details(self, visible: bool) -> None:
-        self.details.setVisible(visible)
-        self.details_toggle.setText("Ocultar detalhes" if visible else "Ver detalhes")
+        if path:
+            self.reference_project.setToolTip(f"Arquivo ativo: {path}")

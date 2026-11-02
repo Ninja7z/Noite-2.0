@@ -293,6 +293,7 @@ class AssistantService:
         text: str,
         conversation_id: str = "default",
         on_chunk: Callable[[str], None] | None = None,
+        on_thinking: Callable[[str], None] | None = None,
         project_root: Path | None = None,
         active_file: str | None = None,
         active_text: str | None = None,
@@ -491,16 +492,19 @@ class AssistantService:
                             on_chunk=collect_chunk,
                         )
                 elif on_chunk is None:
-                    result = await ask_local_model(
-                        safe_prompt, messages=messages, model=self.model
-                    )
+                    kwargs = {"messages": messages, "model": self.model}
+                    if on_thinking is not None:
+                        kwargs["on_thinking"] = on_thinking
+                    result = await ask_local_model(safe_prompt, **kwargs)
                 else:
-                    result = await ask_local_model(
-                        safe_prompt,
-                        messages=messages,
-                        model=self.model,
-                        on_chunk=collect_chunk,
-                    )
+                    kwargs = {
+                        "messages": messages,
+                        "model": self.model,
+                        "on_chunk": collect_chunk,
+                    }
+                    if on_thinking is not None:
+                        kwargs["on_thinking"] = on_thinking
+                    result = await ask_local_model(safe_prompt, **kwargs)
             except asyncio.CancelledError:
                 _emit_activity(
                     on_activity,
