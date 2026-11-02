@@ -341,7 +341,7 @@ def test_reference_dashboard_and_composer_follow_empty_chat_layout(app, tmp_path
 def test_moon_icon_is_multiresolution_and_loadable(app):
     from pathlib import Path
 
-    icon_path = Path(__file__).parents[1] / "assets" / "noite.ico"
+    icon_path = Path(__file__).parents[1] / "src" / "noite" / "assets" / "noite.ico"
     icon = QIcon(str(icon_path))
     sizes = {(size.width(), size.height()) for size in icon.availableSizes()}
 

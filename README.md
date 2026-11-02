@@ -57,7 +57,7 @@ Em outro terminal, inicie a interface real (usa `ServiceClient` e o núcleo da N
 python run_ui.py
 ```
 
-`python run_ui.py --mock` inicia dados fixos apenas para screenshots e testes. O mock não é o modo padrão. Para a CLI, use `python -m noite --cli`.
+`python run_ui.py --mock` inicia dados fixos apenas para screenshots e testes. O mock não é o modo padrão. Após instalar o pacote com o extra desktop, use `noite` para abrir a interface fora do checkout. Para a CLI, use `python -m noite --cli`.
 
 ## Ambiente Windows
 

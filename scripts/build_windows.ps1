@@ -21,7 +21,7 @@ try {
     $Source = Join-Path $Root "packaging\noite_bootstrap.py"
     $Dist = Join-Path $Root "dist"
     $Work = Join-Path $Root "build\pyinstaller-$Name"
-    $Icon = Join-Path $Root "assets\noite.ico"
+    $Icon = Join-Path $Root "src\noite\assets\noite.ico"
     if (-not (Test-Path -LiteralPath $Icon)) { throw "Ícone da Noite não encontrado: $Icon" }
     & $PythonPath -m PyInstaller --noconfirm --onefile --windowed --clean --name $Name --icon $Icon --paths $BuildDir --specpath $BuildDir --distpath $Dist --workpath $Work $Source
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller terminou com código $LASTEXITCODE." }

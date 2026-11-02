@@ -35,3 +35,9 @@ jobs:
       - name: CLI startup smoke test
         shell: bash
         run: printf '/sair\n' | uv run --locked python -m noite --cli
+      - name: UI launcher import smoke test
+        run: uv run --locked python run_ui.py --help
+      - name: Build wheel
+        run: uv build --wheel --out-dir build/wheel-smoke
+      - name: Verify installed wheel imports outside checkout
+        run: uv run --locked python scripts/verify_wheel_install.py build/wheel-smoke

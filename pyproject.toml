@@ -27,7 +27,11 @@ build = ["PyInstaller>=6.22,<7"]
 noite = "noite.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src", "."]
+include = ["noite*", "ui*"]
+
+[tool.setuptools.package-data]
+noite = ["theme.json", "assets/noite.ico", "assets/icons/*.svg", "assets/waves/*.svg"]
 
 [tool.ruff]
 line-length = 100

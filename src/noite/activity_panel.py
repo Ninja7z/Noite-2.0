@@ -218,7 +218,7 @@ class ContextActivityPanel(QFrame):
 
     @staticmethod
     def _icon(name: str) -> QIcon:
-        root = Path(__file__).resolve().parents[2]
+        root = Path(__file__).resolve().parent
         return QIcon(str(root / "assets" / "icons" / f"{name}.svg"))
 
     def set_model(self, model: str, state: str) -> None:

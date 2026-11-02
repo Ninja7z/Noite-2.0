@@ -1,6 +1,6 @@
 # Build do lançador Windows
 
-O executável é um lançador desktop do checkout local: inicia o aplicativo usando o ambiente virtual preparado neste projeto. Ele não embute o interpretador, as dependências Python, o Ollama ou os pesos do modelo. O checkout e o ambiente virtual são requisitos documentados; este formato não é um instalador portátil. O ícone da janela e do executável usa `assets/noite.ico`, recortado da marca da lua roxa presente nas referências do produto.
+O executável é um lançador desktop do checkout local: inicia o aplicativo usando o ambiente virtual preparado neste projeto. Ele não embute o interpretador, as dependências Python, o Ollama ou os pesos do modelo. O checkout e o ambiente virtual são requisitos documentados; este formato não é um instalador portátil. O ícone da janela e do executável usa `src/noite/assets/noite.ico`, recortado da marca da lua roxa presente nas referências do produto.
 
 ## Construção
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-_THEME_PATH = Path(__file__).resolve().parents[2] / "theme.json"
+_THEME_PATH = Path(__file__).resolve().parent / "theme.json"
 with _THEME_PATH.open(encoding="utf-8") as _theme_file:
     _THEME_DOCUMENT = json.load(_theme_file)
 

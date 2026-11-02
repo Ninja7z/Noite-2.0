@@ -380,7 +380,7 @@ class NoiteWindow(QMainWindow):
         self._ollama_was_down = False
         self._installed_model_details: list[dict[str, object]] = []
         self.setWindowTitle("Noite 2.0")
-        icon_path = Path(__file__).resolve().parents[2] / "assets" / "noite.ico"
+        icon_path = Path(__file__).resolve().parent / "assets" / "noite.ico"
         if icon_path.is_file():
             self.setWindowIcon(QIcon(str(icon_path)))
         screen = QGuiApplication.primaryScreen()
@@ -1693,7 +1693,7 @@ class NoiteWindow(QMainWindow):
 
     @staticmethod
     def _icon(name: str) -> QIcon:
-        return QIcon(str(Path(__file__).resolve().parents[2] / "assets" / "icons" / f"{name}.svg"))
+        return QIcon(str(Path(__file__).resolve().parent / "assets" / "icons" / f"{name}.svg"))
 
     @staticmethod
     def _nav_button(
@@ -3149,7 +3149,7 @@ class MCPDialog(QDialog):
 
 def run_gui(client: NoiteClient | None = None) -> int:
     app = QApplication.instance() or QApplication([])
-    icon_path = Path(__file__).resolve().parents[2] / "assets" / "noite.ico"
+    icon_path = Path(__file__).resolve().parent / "assets" / "noite.ico"
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
     settings = get_settings()

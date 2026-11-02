@@ -39,7 +39,7 @@ Atualizado em 2026-11-02 durante a preparação da publicação sanitizada.
 - `pytest -q`: 222 passaram, 1 ignorado (teste de symlink externo não aplicável no Windows).
 - `ruff check .`, `python -m compileall -q src ui run_ui.py tests` e `git diff --check`: passaram.
 - Consulta de metadados Hugging Face manual e explícita retornou cinco opções GGUF quantizadas; nenhum modelo foi baixado.
-- EXE atual: `dist\Noite.exe` (8.679.768 bytes, SHA-256 `0FCCE2695CCB10B540FA24BA6E67CD8AC70E6905D725E507CF8049EBC221CCD8`). É launcher dependente deste checkout, `.venv`, Python/dependências e Ollama; não é standalone. Atalho de desktop aponta para este build e para `assets\noite.ico`.
+- EXE atual: `dist\Noite.exe` (8.679.768 bytes, SHA-256 `0FCCE2695CCB10B540FA24BA6E67CD8AC70E6905D725E507CF8049EBC221CCD8`). É launcher dependente deste checkout, `.venv`, Python/dependências e Ollama; não é standalone. Atalho de desktop aponta para este build e para `src\noite\assets\noite.ico`.
 - Quatro builds antigos preservados em `dist/` e ignorados pelo Git. Nenhum EXE ou ambiente virtual será publicado.
 
 ## Próxima ação exata

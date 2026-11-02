@@ -133,3 +133,10 @@ Não declarar essas fases completas até implementar e validar cada critério em
 - Mensagem enviada pela UI com `ServiceClient` e `qwen2.5:3b`: pergunta “Responda apenas: integração real confirmada.”; a resposta “integração real confirmada.” apareceu no chat. O EXE novo abriu e mostrou a conversa salva.
 - Novo `dist\Noite.exe`: 8.679.768 bytes; SHA-256 `0FCCE2695CCB10B540FA24BA6E67CD8AC70E6905D725E507CF8049EBC221CCD8`. Atalho da Área de Trabalho relido e apontando ao build, ao diretório correto e ao ícone `assets\noite.ico`.
 - Os quatro builds antigos continuam em `dist`, aguardando confirmação explícita para remoção.
+
+## Validação de instalação do wheel — 2026-11-02
+
+- A instalação isolada reproduziu `ModuleNotFoundError: No module named 'ui'`; após incluir `ui`, revelou recursos do tema fora do wheel.
+- O pacote agora inclui `ui.client`, `theme.json`, ícones e ondas como conteúdo instalável.
+- `uv build --wheel` e o smoke de importação fora do checkout passaram na validação local. A CI repetirá o build e a instalação isolada.
+- O EXE continua dependente do checkout/venv; distribuição standalone e instalação Windows limpa seguem pendentes.
