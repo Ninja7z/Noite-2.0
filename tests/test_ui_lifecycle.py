@@ -11,9 +11,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QIcon, QTextCursor
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QInputDialog,
     QLabel,
     QListWidgetItem,
@@ -21,10 +23,13 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QTextBrowser,
     QToolButton,
 )
 
+from noite.activity import make_activity_event
+from noite.activity_panel import ContextActivityPanel
 from noite.ui import MCPDialog, NoiteWindow, TaskThread
 
 
@@ -137,13 +142,110 @@ def test_streamed_text_is_inserted_as_plain_text(app):
     window.chat = QTextBrowser()
     window._streaming_response_active = False
     window._streaming_response_text = ""
+    window._record_activity = lambda _event: None
+    window._show_chat = lambda: None
 
     window._on_stream_chunk("<script>")
     window._on_stream_chunk("literal text")
+    QTest.qWait(140)
 
     assert "<script>literal text" in window.chat.toPlainText()
     assert window.chat.document().toHtml().count("&lt;script&gt;") == 1
     window.deleteLater()
+
+
+def test_streaming_preserves_manual_scroll_and_reports_generation(app):
+    window = NoiteWindow.__new__(NoiteWindow)
+    QMainWindow.__init__(window)
+    window.chat = QTextBrowser()
+    window.chat.setFixedSize(320, 120)
+    window.chat.setPlainText("\n".join(f"linha {index}" for index in range(80)))
+    window.chat.show()
+    app.processEvents()
+    window.chat.verticalScrollBar().setValue(0)
+    window._streaming_response_active = False
+    window._streaming_response_text = ""
+    window._messages = []
+    window._show_chat = lambda: None
+    events = []
+    window._record_activity = events.append
+
+    window._on_stream_chunk("trecho")
+
+    assert window.chat.verticalScrollBar().value() == 0
+    assert events[0].operation == "Geração da resposta"
+    assert events[0].state == "started"
+    window.deleteLater()
+
+
+def test_settings_dialog_scrolls_at_compact_size(app, tmp_path, monkeypatch):
+    from PySide6.QtCore import QSettings
+
+    from noite import ui
+    from noite.config import Settings
+    from noite.ide import ProjectDock
+
+    settings = Settings(_env_file=None, data_dir=tmp_path)
+    monkeypatch.setattr(
+        ui,
+        "QSettings",
+        lambda *_args: QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat),
+    )
+    monkeypatch.setattr(ui, "get_settings", lambda: settings)
+    monkeypatch.setattr(NoiteWindow, "_check_status", lambda self: None)
+    monkeypatch.setattr(ProjectDock, "_restore_workspace", lambda self: None)
+    scrollbars = []
+
+    def inspect_compact_dialog(dialog):
+        dialog.resize(430, 370)
+        dialog.show()
+        app.processEvents()
+        scroll = dialog.findChild(QScrollArea, "settingsScrollArea")
+        assert scroll is not None
+        scrollbars.append(scroll.verticalScrollBar().maximum())
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(QDialog, "exec", inspect_compact_dialog)
+    window = NoiteWindow()
+    window._open_settings()
+
+    assert scrollbars and scrollbars[0] > 0
+    window.close()
+
+
+def test_activity_panel_shows_real_operation_and_elapsed_time(app):
+    panel = ContextActivityPanel()
+    started = make_activity_event("Chamada ao modelo · qwen2.5:3b", "started", "Consultando modelo")
+    panel.add_event(started)
+
+    assert panel.has_active_operations
+    assert "Consultando modelo" in panel.progress.text()
+    QTest.qWait(1050)
+    assert " s" in panel.progress.text()
+
+    panel.add_event(
+        make_activity_event(
+            started.operation,
+            "completed",
+            "Resposta recebida",
+            duration_ms=1040,
+        )
+    )
+    assert not panel.has_active_operations
+    assert "Sem operações" in panel.progress.text()
+    assert panel.events.count() == 2
+    panel.deleteLater()
+
+
+def test_moon_icon_is_multiresolution_and_loadable(app):
+    from pathlib import Path
+
+    icon_path = Path(__file__).parents[1] / "assets" / "noite.ico"
+    icon = QIcon(str(icon_path))
+    sizes = {(size.width(), size.height()) for size in icon.availableSizes()}
+
+    assert not icon.isNull()
+    assert {(16, 16), (32, 32), (48, 48), (256, 256)} <= sizes
 
 
 def test_mcp_call_requires_explicit_approval(app, tmp_path, monkeypatch):
@@ -359,6 +461,246 @@ def test_conversation_sidebar_supports_create_open_rename_delete_and_restore(
         ).fetchone() == (1,)
 
     window.hide()
+
+
+def test_command_palette_shortcut_navigation_and_collapsible_panels(
+    app, tmp_path, monkeypatch
+):
+    from PySide6.QtCore import QSettings
+
+    from noite import ui
+    from noite.config import Settings
+
+    settings = Settings(_env_file=None, data_dir=tmp_path)
+    preferences_file = str(tmp_path / "ui.ini")
+    monkeypatch.setattr(
+        ui,
+        "QSettings",
+        lambda *_args: QSettings(preferences_file, QSettings.Format.IniFormat),
+    )
+    ui.QSettings("Noite", "Noite 2.0").clear()
+    monkeypatch.setattr(ui, "get_settings", lambda: settings)
+    monkeypatch.setattr(NoiteWindow, "_check_status", lambda self: None)
+    from noite.ide import ProjectDock
+
+    # QSettings persiste o último workspace da máquina; isole para validar a
+    # paleta sem projeto aberto, independentemente do estado local do usuário.
+    monkeypatch.setattr(ProjectDock, "_restore_workspace", lambda self: None)
+    window = NoiteWindow()
+    window.resize(1366, 768)
+
+    assert window.context_panel.isHidden()
+    assert "search-files" not in {action.action_id for action in window._palette_actions()}
+    assert window._palette_shortcut.key().toString() == "Ctrl+K"
+
+    window._toggle_context_panel()
+    assert not window.context_panel.isHidden()
+    window._toggle_sidebar()
+    assert window.sidebar.isHidden()
+    assert not window.expand_sidebar_button.isHidden()
+    window._toggle_sidebar()
+    assert not window.sidebar.isHidden()
+    assert window.expand_sidebar_button.isHidden()
+    assert window.size().width() == 1366
+
+    window.close()
+
+
+def test_project_context_status_updates_existing_labels(app, tmp_path):
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QLabel
+
+    window = NoiteWindow.__new__(NoiteWindow)
+    QMainWindow.__init__(window)
+    window.settings = SimpleNamespace(off_grid=True)
+    window.context_panel = SimpleNamespace(
+        set_project=lambda name: setattr(window, "project_name", name)
+    )
+    window.composer_project_label = QLabel()
+
+    window._update_project_context_status(str(tmp_path))
+
+    assert window.project_name == tmp_path.name
+    assert tmp_path.name in window.composer_project_label.text()
+
+
+def test_sidebar_positions_and_theme_preferences_persist(app, tmp_path, monkeypatch):
+    from PySide6.QtCore import QSettings
+
+    from noite import ui
+    from noite.config import Settings
+    from noite.ide import ProjectDock
+
+    settings = Settings(_env_file=None, data_dir=tmp_path)
+    preferences_file = str(tmp_path / "ui.ini")
+    monkeypatch.setattr(
+        ui,
+        "QSettings",
+        lambda *_args: QSettings(preferences_file, QSettings.Format.IniFormat),
+    )
+    monkeypatch.setattr(ui, "get_settings", lambda: settings)
+    monkeypatch.setattr(NoiteWindow, "_check_status", lambda self: None)
+    monkeypatch.setattr(ProjectDock, "_restore_workspace", lambda self: None)
+
+    window = NoiteWindow()
+    assert window.windowFlags() & Qt.WindowType.FramelessWindowHint
+    assert window.minimumSize().width() == 920
+    window._apply_theme("light")
+    assert window.styleSheet() == ui.LIGHT_THEME
+    assert "#fbfaff" in window.command_palette.styleSheet()
+    window._apply_theme("system")
+    assert window.preferences.value("appearance/theme") == "system"
+
+    window._apply_sidebar_position("left")
+    assert window.shell_layout.direction() == ui.QBoxLayout.Direction.LeftToRight
+    assert window.shell_layout.indexOf(window.sidebar) < window.shell_layout.indexOf(
+        window.content_area
+    )
+    window._apply_sidebar_position("right")
+    assert window.shell_layout.indexOf(window.sidebar) > window.shell_layout.indexOf(
+        window.content_area
+    )
+    window._apply_sidebar_position("top")
+    assert window.shell_layout.direction() == ui.QBoxLayout.Direction.TopToBottom
+    assert window.preferences.value("appearance/sidebar") == "top"
+    window.resize(920, 620)
+    assert window.minimumSize().width() <= 920
+
+    persisted = QSettings(preferences_file, QSettings.Format.IniFormat)
+    assert persisted.value("appearance/theme") == "system"
+    assert persisted.value("appearance/sidebar") == "top"
+    window.close()
+
+
+def test_progress_panel_auto_opens_for_real_operation_and_closes_afterward(
+    app, tmp_path, monkeypatch
+):
+    from PySide6.QtCore import QSettings
+
+    from noite import ui
+    from noite.config import Settings
+    from noite.ide import ProjectDock
+
+    settings = Settings(_env_file=None, data_dir=tmp_path)
+    preferences_file = str(tmp_path / "progress.ini")
+    monkeypatch.setattr(
+        ui,
+        "QSettings",
+        lambda *_args: QSettings(preferences_file, QSettings.Format.IniFormat),
+    )
+    monkeypatch.setattr(ui, "get_settings", lambda: settings)
+    monkeypatch.setattr(NoiteWindow, "_check_status", lambda self: None)
+    monkeypatch.setattr(ProjectDock, "_restore_workspace", lambda self: None)
+
+    window = NoiteWindow()
+    assert window.context_panel.isHidden()
+    started = make_activity_event("Leitura de anexos", "started", "Extraindo documentos")
+    window._record_activity(started)
+    assert not window.context_panel.isHidden()
+    assert window._progress_auto_opened
+
+    window._record_activity(
+        make_activity_event("Leitura de anexos", "completed", "Extração concluída")
+    )
+    assert window.context_panel.isHidden()
+    assert not window._progress_auto_opened
+    window.close()
+
+
+def test_selected_attachment_excerpt_is_sent_through_chat_worker(
+    app, tmp_path, monkeypatch
+):
+    from PySide6.QtCore import QSettings
+
+    from noite import ui
+    from noite.attachments import ExtractedAttachment
+    from noite.config import Settings
+    from noite.ide import ProjectDock
+
+    settings = Settings(_env_file=None, data_dir=tmp_path)
+    preferences_file = str(tmp_path / "attachment-chat.ini")
+    monkeypatch.setattr(
+        ui,
+        "QSettings",
+        lambda *_args: QSettings(preferences_file, QSettings.Format.IniFormat),
+    )
+    monkeypatch.setattr(ui, "get_settings", lambda: settings)
+    monkeypatch.setattr(NoiteWindow, "_check_status", lambda self: None)
+    monkeypatch.setattr(ProjectDock, "_restore_workspace", lambda self: None)
+    captured = {}
+
+    async def fake_respond(self, text, **_kwargs):
+        captured["text"] = text
+        return "Resposta de teste"
+
+    class SignalStub:
+        def emit(self, *_args):
+            return None
+
+    class WorkerStub:
+        streamed = SignalStub()
+        activity = SignalStub()
+
+    def synchronous_worker(self, task, *, completed=None, finished=None, **_kwargs):
+        result = asyncio.run(task(WorkerStub()))
+        if completed is not None:
+            completed(result)
+        if finished is not None:
+            finished()
+        return None
+
+    monkeypatch.setattr(ui.AssistantService, "respond", fake_respond)
+    monkeypatch.setattr(NoiteWindow, "_start_worker", synchronous_worker)
+    window = NoiteWindow()
+    attachment_text = "Introdução. " * 500 + "GPU VRAM regressão Qwen. " + "Apêndice. " * 500
+    window._attachments = [
+        ExtractedAttachment(
+            path=tmp_path / "report.txt",
+            media_type="TXT",
+            size_bytes=len(attachment_text),
+            text=attachment_text,
+            truncated=False,
+        )
+    ]
+    window.input.setPlainText("Qual a regressão de VRAM do Qwen?")
+    window._pending_attachment_count = 1
+    window.send_message()
+    assert not captured
+    assert window.input.toPlainText()
+    window._pending_attachment_count = 0
+    window.send_message()
+
+    assert "VRAM regressão Qwen" in captured["text"]
+    assert "dado não confiável" in captured["text"]
+    assert len(captured["text"]) < 5000
+    assert "report.txt" in window.chat.toPlainText()
+    window.close()
+
+
+def test_terminal_dock_opens_without_running_commands(app, tmp_path, monkeypatch):
+    from noite import ui
+    from noite.config import Settings
+    from noite.ide import ProjectDock
+
+    settings = Settings(_env_file=None, data_dir=tmp_path)
+    monkeypatch.setattr(ui, "get_settings", lambda: settings)
+    monkeypatch.setattr(NoiteWindow, "_check_status", lambda self: None)
+    monkeypatch.setattr(ProjectDock, "_restore_workspace", lambda self: None)
+    window = NoiteWindow()
+    assert window.terminal_dock.isHidden()
+    window._toggle_terminal()
+    assert not window.terminal_dock.isHidden()
+    assert window.terminal_run_button.isEnabled() is False
+    from types import SimpleNamespace
+
+    window._terminal_last_result = SimpleNamespace(
+        command="Get-Location", exit_code=0, output="C:\\workspace"
+    )
+    window._insert_terminal_result()
+    assert "dados não confiáveis" in window.input.toPlainText()
+    assert "Código de saída: 0" in window.input.toPlainText()
+    window.close()
 
 
 def test_project_dock_opens_edits_and_saves_workspace_file(app, tmp_path, monkeypatch):

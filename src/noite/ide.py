@@ -4,6 +4,7 @@ import ast
 import re
 import threading
 from pathlib import Path
+from time import perf_counter
 
 from PySide6.QtCore import QDir, QSettings, QSortFilterProxyModel, Qt, QThread, Signal
 from PySide6.QtGui import (
@@ -39,6 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .activity import make_activity_event
 from .workspace import (
     SearchMatch,
     _is_sensitive,
@@ -189,6 +191,7 @@ class WorkspaceSearchWorker(QThread):
     matches_ready = Signal(object)
     failed = Signal(str)
     progress = Signal(str)
+    activity = Signal(object)
 
     def __init__(self, workspace: Path, query: str, parent=None) -> None:
         super().__init__(parent)
@@ -200,6 +203,15 @@ class WorkspaceSearchWorker(QThread):
         self._cancel.set()
 
     def run(self) -> None:
+        started_at = perf_counter()
+        self.activity.emit(
+            make_activity_event(
+                "Busca no projeto",
+                "started",
+                "Pesquisa iniciada",
+                details=f"Projeto: {self.workspace.name}",
+            )
+        )
         try:
             matches = search_workspace_text(
                 self.workspace,
@@ -208,13 +220,38 @@ class WorkspaceSearchWorker(QThread):
                 progress=self.progress.emit,
             )
         except Exception as exc:
+            self.activity.emit(
+                make_activity_event(
+                    "Busca no projeto",
+                    "failed",
+                    "Pesquisa não concluída",
+                    duration_ms=max(0, round((perf_counter() - started_at) * 1000)),
+                    details=f"Falha do tipo {type(exc).__name__}.",
+                )
+            )
             self.failed.emit(f"{type(exc).__name__}: falha na busca do projeto.")
             return
+        state = "cancelled" if self._cancel.is_set() else "completed"
+        summary = (
+            "Pesquisa cancelada"
+            if state == "cancelled"
+            else f"Pesquisa concluída · {len(matches)} resultado(s)"
+        )
+        self.activity.emit(
+            make_activity_event(
+                "Busca no projeto",
+                state,
+                summary,
+                duration_ms=max(0, round((perf_counter() - started_at) * 1000)),
+                details=f"Projeto: {self.workspace.name}",
+            )
+        )
         self.matches_ready.emit(matches)
 
 
 class WorkspaceSearchDialog(QDialog):
     match_activated = Signal(object)
+    activity = Signal(object)
 
     def __init__(self, workspace: Path, parent=None) -> None:
         super().__init__(parent)
@@ -256,6 +293,7 @@ class WorkspaceSearchDialog(QDialog):
         self.worker.matches_ready.connect(self._show_matches)
         self.worker.failed.connect(self.status.setText)
         self.worker.progress.connect(self.status.setText)
+        self.worker.activity.connect(self.activity.emit)
         self.worker.finished.connect(self._worker_finished)
         self.worker.start()
 
@@ -294,6 +332,8 @@ class WorkspaceSearchDialog(QDialog):
 
 class ProjectDock(QDockWidget):
     workspace_changed = Signal(str)
+    activity = Signal(object)
+    active_file_changed = Signal(object)
 
     def __init__(self, parent=None) -> None:
         super().__init__("Projeto", parent)
@@ -424,6 +464,7 @@ class ProjectDock(QDockWidget):
             return
         dialog = WorkspaceSearchDialog(self.workspace, self)
         dialog.match_activated.connect(self.open_search_match)
+        dialog.activity.connect(self.activity.emit)
         dialog.show()
         self._search_dialog = dialog
 
@@ -590,11 +631,38 @@ class ProjectDock(QDockWidget):
         candidate = Path(self._model.filePath(source_index))
         if candidate.is_dir():
             return
+        started_at = perf_counter()
+        self.activity.emit(
+            make_activity_event(
+                "Leitura de arquivo",
+                "started",
+                f"Lendo arquivo · {candidate.name}",
+                details=f"Caminho no projeto: {candidate.relative_to(self.workspace).as_posix()}",
+            )
+        )
         try:
             document = read_workspace_text(self.workspace, candidate)
         except (OSError, ValueError) as exc:
+            self.activity.emit(
+                make_activity_event(
+                    "Leitura de arquivo",
+                    "failed",
+                    f"Não foi possível abrir · {candidate.name}",
+                    duration_ms=max(0, round((perf_counter() - started_at) * 1000)),
+                    details=f"Falha do tipo {type(exc).__name__}.",
+                )
+            )
             QMessageBox.warning(self, "Não foi possível abrir", str(exc))
             return
+        self.activity.emit(
+            make_activity_event(
+                "Leitura de arquivo",
+                "completed",
+                f"Arquivo aberto · {candidate.name}",
+                duration_ms=max(0, round((perf_counter() - started_at) * 1000)),
+                details=f"Caminho no projeto: {candidate.relative_to(self.workspace).as_posix()}",
+            )
+        )
         key = str(document.path)
         if key in self._documents:
             self.tabs.setCurrentWidget(self._documents[key][0])
@@ -655,6 +723,8 @@ class ProjectDock(QDockWidget):
         self.save_button.setEnabled(bool(current and current[1].document().isModified()))
         self.find_file_button.setEnabled(current is not None)
         self.syntax_button.setEnabled(current is not None)
+        snapshot = self.active_document_snapshot()
+        self.active_file_changed.emit(snapshot[0] if snapshot else None)
 
     def check_python_syntax(self) -> None:
         current = self._current_document()

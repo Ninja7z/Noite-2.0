@@ -51,13 +51,15 @@ Critério: abrir, editar, salvar, fechar e reabrir arquivo real em workspace de 
 
 ## Fase 3 — Terminal e qualidade
 
-- [ ] Terminal por subprocesso, cwd dentro do workspace, saída incremental e cancelamento da árvore de processos. Segurança descrita em `WORKSPACE_OPERATIONS_SECURITY.md`; aguarda revisão antes de implementação.
-- [ ] Exibir erro, stdout/stderr e código de saída; não elevar privilégios.
+- [x] Terminal PowerShell por subprocesso, workspace obrigatório, saída incremental, timeout, limite de saída, cancelamento e supervisão da árvore por Windows Job Object.
+- [x] Mostrar saída combinada stdout/stderr, erro e código de saída; não elevar privilégios.
+- [x] Modo seguro com allowlist de leitura e caminho resolvido dentro do workspace; subexpressões e encadeamento bloqueados.
+- [x] Modo avançado do usuário separado, com confirmação de comandos destrutivos.
 - [ ] Adicionar painel Problemas, integrações configuráveis de Ruff/pytest e navegação para arquivo/linha.
 - [x] Diagnóstico inicial de sintaxe Python por AST no buffer atual, sem executar código, com navegação para linha/coluna.
 - [ ] Mostrar e cancelar execução de testes sem bloquear Qt.
 
-Critério: comando benigno real executa em projeto de teste, processo longo pode ser interrompido e UI continua responsiva.
+Critério: comando benigno real executa em projeto de teste, processo longo pode ser interrompido e UI continua responsiva. Os diagnósticos automáticos Ruff/pytest permanecem fora desta entrega.
 
 ## Fase 4 — Contexto de projeto e programação controlada
 
@@ -106,7 +108,9 @@ Critério: iniciar por instalação/atalho em Windows limpo, usar funções cent
 
 ## Estado
 
-- Fase atual: 2 — estrutura da IDE.
-- Fase 0 e Fase 1 concluídas; evidências e limitações no registro de engenharia e matriz de testes.
-- Fase 2 em andamento: explorador/editor inicial, busca global e local, criação confirmada de arquivo/pasta implementados. Renomear/excluir, terminal, painel inferior e validação visual completa ainda pendentes.
+- Fase atual: 4 — contexto de projeto e programação controlada.
+- Fases 0–3: base, conversas, IDE inicial, fluidez/terminal e atividade implementados em partes; ver `EVOLUTION_PROGRESS.md` para teste e limites.
+- Fase 2: editor, busca, criação confirmada, sidebar reposicionável, Command Palette, temas e configurações presentes. Rename/delete continuam fora do escopo autorizado.
+- Fase 3: terminal PowerShell seguro e diagnóstico AST presentes; painel Problemas e execução/cancelamento não bloqueante de pytest/Ruff seguem pendentes.
+- Fase 4–8: incompletas; não avançar o status sem satisfazer os critérios de cada fase. Detalhes e próxima tarefa em `EVOLUTION_PROGRESS.md`.
 - Revisar `TEST_MATRIX.md` e `CONTINUATION_STATE.md` ao concluir cada fase.

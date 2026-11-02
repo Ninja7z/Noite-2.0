@@ -7,6 +7,7 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 MAX_TEXT_FILE_BYTES = 1_000_000
 MAX_SEARCH_FILES = 5_000
@@ -30,12 +31,30 @@ BLOCKED_NAMES = {
 BLOCKED_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
 BLOCKED_DIRECTORIES = {".ssh", ".aws", ".azure", ".gnupg"}
 _SECRET_VALUE = re.compile(
-    r"(?i)\b(api[_-]?key|access[_-]?token|password|secret)\b"
-    r"(\s*[:=]\s*)([\"']?)[A-Za-z0-9_./+=:-]{8,}([\"']?)"
+    r"(?im)(\b[A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|TOKEN|SECRET|PASSWORD|"
+    r"CREDENTIALS?|AUTHORIZATION)[A-Z0-9_]*)"
+    r"(\s*[:=]\s*)([\"']?)([^\s\"'`;,]+)([\"']?)"
 )
+_BEARER_VALUE = re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+")
+_BASIC_VALUE = re.compile(r"(?i)(\bBasic\s+)[A-Za-z0-9+/=_-]+")
+_PRIVATE_KEY_BLOCK = re.compile(
+    r"-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----.*?-----END \1-----",
+    re.DOTALL | re.IGNORECASE,
+)
+_URL = re.compile(r"[a-z][a-z0-9+.-]*://[^\s\"'<>]+", re.IGNORECASE)
+_SENSITIVE_NAME = re.compile(
+    r"(?i)(?:^|[_-])(?:secret|token|password|passwd|credential|authorization|auth|"
+    r"api[_-]?key|private[_-]?key|client[_-]?secret)(?:$|[_-])"
+)
+_ASSIGNMENT = re.compile(r"(?im)\b([A-Za-z_][A-Za-z0-9_-]*)\s*[:=]\s*(.*)$")
 _KNOWN_TOKEN = re.compile(
-    r"(?:sk-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|"
+    r"(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|"
     r"xox[baprs]-[A-Za-z0-9-]{12,}|AKIA[A-Z0-9]{16})"
+)
+_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b")
+_QUOTED_SECRET = re.compile(
+    r"(?i)\b([A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|TOKEN|SECRET|PASSWORD|"
+    r"CREDENTIALS?)[A-Z0-9_]*)\b(\s*[:=]\s*)(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')"
 )
 
 
@@ -203,18 +222,22 @@ def search_workspace_text(
     folded_needle = needle.casefold()
     for current, directories, filenames in os.walk(root, followlinks=False):
         current_path = Path(current)
+        if not _is_within_workspace(current_path, root):
+            directories.clear()
+            continue
         directories[:] = [
             name
             for name in directories
             if name.casefold() not in ignored
             and not _is_sensitive(current_path / name)
             and not (current_path / name).is_symlink()
+            and _is_within_workspace(current_path / name, root)
         ]
         for filename in filenames:
             if cancelled():
                 return matches
             path = current_path / filename
-            if _is_sensitive(path) or path.is_symlink():
+            if _is_sensitive(path) or path.is_symlink() or not _is_within_workspace(path, root):
                 continue
             try:
                 size = path.stat().st_size
@@ -299,12 +322,16 @@ def retrieve_workspace_context(
         scanned_files = 0
         for current, directories, filenames in os.walk(root, followlinks=False):
             current_path = Path(current)
+            if not _is_within_workspace(current_path, root):
+                directories.clear()
+                continue
             directories[:] = [
                 name
                 for name in directories
                 if name.casefold() not in ignored
                 and not _is_sensitive(current_path / name)
                 and not (current_path / name).is_symlink()
+                and _is_within_workspace(current_path / name, root)
                 and not (
                     hasattr(current_path / name, "is_junction")
                     and (current_path / name).is_junction()
@@ -312,7 +339,12 @@ def retrieve_workspace_context(
             ]
             for filename in filenames:
                 path = current_path / filename
-                if path in seen or _is_sensitive(path) or path.is_symlink():
+                if (
+                    path in seen
+                    or _is_sensitive(path)
+                    or path.is_symlink()
+                    or not _is_within_workspace(path, root)
+                ):
                     continue
                 if hasattr(path, "is_junction") and path.is_junction():
                     continue
@@ -353,8 +385,133 @@ def retrieve_workspace_context(
 
 
 def _redact_secret_values(text: str) -> str:
-    text = _SECRET_VALUE.sub(r"\1\2\3[REDACTED]\4", text)
-    return _KNOWN_TOKEN.sub("[REDACTED]", text)
+    text = _PRIVATE_KEY_BLOCK.sub("[REDACTED PRIVATE KEY]", text)
+    text = _URL.sub(_redact_url, text)
+    text = _QUOTED_SECRET.sub(_redact_quoted_secret, text)
+    text = _redact_sensitive_assignments(text)
+    text = _SECRET_VALUE.sub(_redact_secret_assignment, text)
+    text = _BEARER_VALUE.sub(r"\1[REDACTED]", text)
+    text = _BASIC_VALUE.sub(r"\1[REDACTED]", text)
+    return _JWT.sub("[REDACTED JWT]", _KNOWN_TOKEN.sub("[REDACTED]", text))
+
+
+def _redact_quoted_secret(match: re.Match[str]) -> str:
+    name, separator, value = match.groups()
+    if not _is_sensitive_secret_name(name) or _is_placeholder_secret(value):
+        return match.group(0)
+    quote = value[:1] if value[:1] in {"'", '"'} else ""
+    return f"{name}{separator}{quote}[REDACTED]{quote}"
+
+
+def _redact_secret_assignment(match: re.Match[str]) -> str:
+    name, separator, quote, value, closing_quote = match.groups()
+    if not _is_sensitive_secret_name(name) or _is_placeholder_secret(value):
+        return match.group(0)
+    return f"{name}{separator}{quote}[REDACTED]{closing_quote}"
+
+
+def _is_sensitive_secret_name(name: str) -> bool:
+    return bool(_SENSITIVE_NAME.search(name))
+
+
+def _is_placeholder_secret(value: str) -> bool:
+    normalized = value.strip().strip("\"'").casefold()
+    return normalized in {
+        "",
+        "none",
+        "null",
+        "true",
+        "false",
+        "n/a",
+        "not set",
+        "[redacted]",
+    }
+
+
+def _redact_url(match: re.Match[str]) -> str:
+    raw = match.group(0)
+    try:
+        parts = urlsplit(raw)
+        netloc = parts.netloc
+        userinfo, separator, _host = parts.netloc.rpartition("@")
+        has_password_delimiter = separator and ":" in userinfo
+        known_secret_user = bool(_KNOWN_TOKEN.search(parts.username or ""))
+        if has_password_delimiter or known_secret_user:
+            # Preserve the raw host/port segment. Accessing parts.port can raise
+            # ValueError for malformed ports; that must never return raw userinfo.
+            host_and_port = parts.netloc.rpartition("@")[2]
+            netloc = f"[REDACTED]@{host_and_port}"
+        query = urlencode(
+            [
+                (key, "[REDACTED]" if _is_sensitive_query_key(key) else value)
+                for key, value in parse_qsl(parts.query, keep_blank_values=True)
+            ]
+        )
+        return urlunsplit((parts.scheme, netloc, parts.path, query, parts.fragment))
+    except ValueError:
+        scheme, marker, remainder = raw.partition("://")
+        if not marker:
+            return raw
+        userinfo, at, host_and_path = remainder.rpartition("@")
+        if at and (":" in userinfo or _KNOWN_TOKEN.search(userinfo)):
+            return f"{scheme}://[REDACTED]@{host_and_path}"
+        return raw
+
+
+def _is_sensitive_query_key(key: str) -> bool:
+    return bool(_SENSITIVE_NAME.search(key)) or key.casefold() in {"password", "passwd", "token"}
+
+
+def _redact_sensitive_assignments(text: str) -> str:
+    lines = []
+    for line in text.splitlines(keepends=True):
+        line_ending = ""
+        body = line
+        if body.endswith("\r\n"):
+            body, line_ending = body[:-2], "\r\n"
+        elif body.endswith(("\r", "\n")):
+            body, line_ending = body[:-1], body[-1:]
+        for match in _ASSIGNMENT.finditer(body):
+            explicit_client_id = bool(
+                re.search(r"(?i)\bCLIENT[_-]?ID\b", match.group(1))
+                and re.search(r"(?i)\bcredential\b", body)
+            )
+            if not (_is_sensitive_secret_name(match.group(1)) or explicit_client_id):
+                continue
+            value_start, value_end = match.span(2)
+            value = body[value_start:value_end]
+            quote = value[:1] if value[:1] in {"'", '"'} else ""
+            if quote:
+                value_match = re.match(
+                    r"\"((?:\\.|[^\"\\])*)\"(.*)$" if quote == '"' else r"'((?:\\.|[^'\\])*)'(.*)$",
+                    value,
+                )
+                if value_match:
+                    secret_value, trailing = value_match.groups()
+                else:
+                    secret_value, trailing = value[1:], ""
+                closing = quote
+            else:
+                comment_match = re.search(r"\s+#.*$", value)
+                if comment_match:
+                    secret_value = value[: comment_match.start()]
+                    trailing = value[comment_match.start() :]
+                else:
+                    secret_value, trailing = value, ""
+                closing = ""
+            if _is_placeholder_secret(secret_value):
+                continue
+            body = body[:value_start] + quote + "[REDACTED]" + closing + trailing + body[value_end:]
+            break
+        lines.append(body + line_ending)
+    return "".join(lines)
+
+
+def _is_within_workspace(path: Path, root: Path) -> bool:
+    try:
+        return path.resolve(strict=False).is_relative_to(root)
+    except (OSError, ValueError):
+        return False
 
 
 def _format_project_context(files: list[tuple[str, str]], budget: int) -> str:

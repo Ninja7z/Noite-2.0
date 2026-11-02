@@ -1,6 +1,6 @@
 # Build do lançador Windows
 
-O arquivo Noite.exe é um lançador desktop do checkout local: inicia o aplicativo usando o ambiente virtual preparado neste projeto. Ele não embute o interpretador, as dependências Python, o Ollama ou os pesos do modelo. O checkout e o ambiente virtual são requisitos documentados; este formato é próprio para a Área de Trabalho desta máquina e não é um instalador portátil.
+O executável é um lançador desktop do checkout local: inicia o aplicativo usando o ambiente virtual preparado neste projeto. Ele não embute o interpretador, as dependências Python, o Ollama ou os pesos do modelo. O checkout e o ambiente virtual são requisitos documentados; este formato não é um instalador portátil. O ícone da janela e do executável usa `assets/noite.ico`, recortado da marca da lua roxa presente nas referências do produto.
 
 ## Construção
 
@@ -12,9 +12,13 @@ No PowerShell, a partir da raiz do repositório, crie um venv Python 3.13 e inst
     python -m pip install -e ".[desktop,build]"
     .\scripts\build_windows.ps1
 
-O resultado fica em dist\Noite.exe. Para copiá-lo à Área de Trabalho:
+O resultado padrão fica em `dist\Noite.exe`. Para gerar um nome separado e preservar um executável anterior, informe `-Name`:
 
-    .\scripts\build_windows.ps1 -CopyToDesktop
+    .\scripts\build_windows.ps1 -Name Noite-2.0-Evolution-20261101
+
+Para copiar esse artefato à Área de Trabalho:
+
+    .\scripts\build_windows.ps1 -Name Noite-2.0-Evolution-20261101 -CopyToDesktop
 
 O lançador registra o caminho do checkout usado na construção. Se o checkout ou o ambiente virtual for movido ou recriado, gere um novo lançador. O primeiro uso requer que as dependências de desktop e build estejam instaladas no venv.
 
@@ -26,7 +30,7 @@ Para entregar um atalho executável que abre o aplicativo nesta máquina, `Noite
 
 ## Dependências, configurações e dados
 
-Inicie o Ollama e baixe o modelo indicado nas configurações (padrão qwen2.5:3b). O endereço padrão é http://127.0.0.1:11435. O lançador herda as variáveis de ambiente. O arquivo .env permanece fora do executável.
+Inicie o Ollama e instale manualmente o modelo indicado nas configurações (padrão `qwen2.5:3b`). O endereço padrão é `http://127.0.0.1:11434`. O lançador herda as variáveis de ambiente. O arquivo `.env` permanece fora do executável.
 
 O histórico e as configurações ficam em %USERPROFILE%\.noite, separados do checkout, do venv e do executável. Reconstruir ou substituir Noite.exe não os apaga.
 
@@ -34,4 +38,4 @@ Roblox Studio e seus servidores MCP não são instalados pelo lançador. Cada in
 
 ## Validação
 
-Execute python -m pytest -q e ruff check . antes do build. Inicie dist\Noite.exe e confirme a janela do Noite. Os diretórios build e dist são artefatos locais ignorados pelo Git.
+Execute compileall, `ruff check .`, `pytest -q` e `git diff --check` antes do build. Inicie o executável criado e confirme a janela, ícone e encerramento. Este smoke test não comprova distribuição standalone nem substitui um teste manual de conversa com Ollama. Os diretórios build e dist são artefatos locais ignorados pelo Git.

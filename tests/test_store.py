@@ -43,8 +43,6 @@ def test_database_creation_persistence_and_fts_triggers(tmp_path) -> None:
         ).fetchone()
         is None
     )
-
-    connection.close()
     connection = open_database(path)
     assert connection.execute(
         "SELECT content FROM messages WHERE id = ?", (message_id,)
@@ -58,6 +56,67 @@ def test_database_creation_persistence_and_fts_triggers(tmp_path) -> None:
         is None
     )
     connection.close()
+
+
+def test_recreates_schema_if_database_file_is_replaced_in_same_process(tmp_path) -> None:
+    path = tmp_path / "replace.sqlite3"
+    connection = open_database(path)
+    connection.execute(
+        "INSERT INTO messages(trace_id, role, content) VALUES (?, ?, ?)",
+        ("before-recreate", "user", "obsolete searchable marker"),
+    )
+    connection.commit()
+    assert connection.execute(
+        "SELECT content FROM messages_fts WHERE messages_fts MATCH 'obsolete'"
+    ).fetchone() is not None
+    connection.close()
+
+    path.unlink()
+    path.touch()
+    connection = open_database(path)
+    try:
+        conversations = connection.execute(
+            "SELECT id, title FROM conversations"
+        ).fetchall()
+        assert len(conversations) == 1
+        assert conversations[0][1] == "Conversa local"
+        assert get_active_conversation_id(connection) == conversations[0][0]
+        assert connection.execute("SELECT COUNT(*) FROM messages").fetchone() == (0,)
+        created_id = create_conversation(connection, "Após recriação")
+        assert connection.execute(
+            "SELECT title FROM conversations WHERE id = ?", (created_id,)
+        ).fetchone() == ("Após recriação",)
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = 'messages_ai'"
+        ).fetchone() == ("messages_ai",)
+        connection.execute(
+            "INSERT INTO messages(trace_id, role, content) VALUES (?, ?, ?)",
+            ("after-recreate", "user", "fresh searchable marker"),
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT id FROM messages WHERE trace_id = 'after-recreate'"
+        ).fetchone()
+        assert connection.execute(
+            "SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'fresh'"
+        ).fetchone() == row
+        connection.execute(
+            "UPDATE messages SET content = 'revised searchable marker' WHERE id = ?", row
+        )
+        connection.commit()
+        assert connection.execute(
+            "SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'fresh'"
+        ).fetchone() is None
+        assert connection.execute(
+            "SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'revised'"
+        ).fetchone() == row
+        connection.execute("DELETE FROM messages WHERE id = ?", row)
+        connection.commit()
+        assert connection.execute(
+            "SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'revised'"
+        ).fetchone() is None
+    finally:
+        connection.close()
 
 
 def test_database_uses_wal_and_busy_timeout(tmp_path):

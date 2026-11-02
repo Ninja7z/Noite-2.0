@@ -1,75 +1,46 @@
-# Estado de continuação — 2026-11-01
+# Estado de continuidade — evolução Noite 2.0
 
-## Fase atual
+Atualizado em 2026-11-01 após testes completos, build e smoke test visual do EXE final.
 
-Fase 2 — estrutura inicial da IDE, em andamento.
+## Ambiente preservado
 
-## Checkout e Git
+- Worktree: `C:\Users\crist\Noite-2.0-worktrees\stabilize-core-lab-1d2bbe70186b491093ebdb2b7307e001`.
+- Branch: `codex/noite-ui-build`.
+- Commit-base: `b1f2e87fb60c9cd1ae8fa7d2c32c5b66d2fb8efa`.
+- Ambiente virtual existente `.venv` reutilizado; nenhuma dependência foi instalada ou atualizada.
+- Ollama local previamente verificado em `http://127.0.0.1:11434`, modelo `qwen2.5:3b`.
+- Hardware de referência: i7-3770 sem AVX2, GTX 1660 Super 6 GB, 16 GB DDR3, Windows 11 x64.
+- Nenhum commit, push, merge, reset ou operação remota foi executado.
 
-- Checkout: `<checkout-root>`.
-- Branch: `codex/stabilize-core`.
-- Commit de implementação local: `04c3af7`; remoto ainda está em `ac204fa` até o push.
-- `origin`: `https://github.com/Ninja7z/Noite-2.0.git`.
-- PR #1: https://github.com/Ninja7z/Noite-2.0/pull/1 — aberto, draft, sem merge; head remoto confirmado em `ac204fa` após o push.
-- A implementação foi commitada localmente; o push foi autorizado e ainda está pendente. Sem merge.
-- `.env` não está presente nem rastreado no checkout. O histórico contém `.env` em `9af7993`; inspecionei só os nomes dos campos e confirmei que `ANTHROPIC_API_KEY` estava vazio e os demais eram configurações locais. Nenhum segredo foi detectado; `.env.example` é o exemplo público.
+## Implementação integrada
 
-## Concluído nesta continuação
+- Tema escuro, claro e sistema; sidebar esquerda/direita/superior; preferências salvas em `QSettings`.
+- Command Palette `Ctrl+K`; painel de contexto/atividade com estados emitidos pelo sistema, duração em tempo real e preferência de exibição.
+- Streaming incremental como texto plano; Markdown final é renderizado ao concluir; cancelamento assíncrono e encerramento aguardando workers.
+- Terminal PowerShell com workspace obrigatório, allowlist de leitura e caminhos resolvidos dentro do workspace, modo avançado separado, confirmação de comandos destrutivos, ambiente reduzido, timeout, saída limitada e Job Object para a árvore do processo.
+- Anexos por botão/drag and drop: TXT, MD, PY, JSON, CSV, XML, LOG, YAML/YML, PDF, DOCX, XLSX e PPTX; extração em background; até quatro arquivos e trechos relevantes limitados por mensagem.
+- PDF extraído pelo módulo QtPdf já disponível no PySide6. PDF digitalizado sem texto não tem OCR.
+- Gerenciador do Ollama consulta modelos locais e metadados; seleção persistente. Busca Hugging Face é explícita, limitada a metadados e não baixa pesos.
+- Ícone `.ico` da lua roxa recortado da marca nas imagens de referência, ligado à janela e ao processo PyInstaller.
+- Referências Open WebUI consultadas para padrões de navegação/chat; identidade visual preservada.
 
-- Fase 0 auditada; ver `ENGINEERING_AUDIT.md`.
-- Fase 1 implementou entidade persistente de conversas, CRUD, isolamento, restauração, título automático protegido contra renomeação e identidade determinística Noite/modelo.
-- DB real migrado preservando as 22 mensagens e a integridade; backup: `%USERPROFILE%\.noite\noite.sqlite3.pre-conversations-20261101-010721.bak`.
-- Fase 2 avançou com dock de projeto: abrir/reabrir workspace, árvore filtrada, abas, editor PySide6, números de linha, realce básico de Python, dirty marker, salvamento explícito, busca global assíncrona, busca local Ctrl+F e criação confirmada de arquivo/pasta.
-- O commit `ac204fa` foi enviado para `origin/codex/stabilize-core`; a implementação desta continuação está em `04c3af7`.
-- Incorporei achados da revisão local do PR: chamada de status e busca fora do event loop; gravação atômica de turnos para não deixar mensagem sem resposta; validação de URL/off-grid; router com imperativos e busca explícita de arquivos; logging local sem texto de conversa; configuração MCP corrompida preservada, aprovação vinculada ao fingerprint do executável/args, resultado limitado e schema validado antes de abrir o servidor; importação LiteLLM adiada até a primeira geração; launcher registra stdout/stderr em ~/.noite/launcher.log.
-- Leitura/salvamento bloqueiam padrões comuns de segredos, arquivos >1 MB, binários, UTF-8 inválido e caminhos resolvidos fora do workspace. O hash evita sobrescrever uma alteração externa. UTF-8 BOM e terminadores CRLF/CR são preservados.
-- Comparação técnica e decisão do editor registradas em `MASTER_PLAN.md`.
+## Limites conhecidos
 
-## Tarefa concluída nesta etapa
+- O catálogo Hugging Face oferece parecer preliminar por tags/tamanho publicado; não afirma benchmark, RAM de execução ou compatibilidade garantida com CPU sem AVX2.
+- PDFs sem camada textual não passam por OCR.
+- O EXE produzido pelo script é um lançador do checkout e do `.venv`; não é standalone nem inclui Ollama/pesos.
+- A conversa real e o início do EXE foram verificados; ainda falta uma matriz visual completa em diferentes larguras e instalação em Windows limpo.
+- O status do workspace tinha referência a um atributo removido (`project_label`); foi removida e um teste de regressão foi incluído.
+- O plano mestre continua parcialmente incompleto: fases 4–8 têm itens pendentes listados em `EVOLUTION_PROGRESS.md`.
 
-- Busca global testada no app Windows: `MAX_SEARCH_RESULTS` retornou duas linhas e duplo clique abriu `workspace.py` no editor.
-- Suíte naquela rodada: `pytest -q` — 87 passaram; `ruff check .` passou; `git diff --check` passou.
-- CLI iniciou e encerrou com `/sair`. UI fechada após inspeção; nenhum processo do app permanece ativo.
+## Validação desta retomada
 
-## Continuação — edição, diagnóstico e contexto seletivo
+- `pytest -q`: 209 passaram, 1 ignorado.
+- `ruff check .`, `python -m compileall -q src tests` e `git diff --check`: passaram.
+- Consulta de metadados Hugging Face manual e explícita retornou cinco opções GGUF quantizadas; nenhum modelo foi baixado.
+- EXE testado: `dist\Noite-2.0-Evolution-20261101-final.exe` (8.681.583 bytes, SHA-256 `B9040F23CBF80779B13EF4DC2C690DE722B31D9CABAD31DB8478DDA481A7EC1B`). O launcher exige que este checkout e `.venv` permaneçam disponíveis.
+- Dois EXEs anteriores preservados. Nenhum commit, push, merge ou operação remota executada.
 
-- Busca e substituição no arquivo aberto ficam no buffer até salvamento; substituir tudo gera uma única ação de undo.
-- Verificação inicial de sintaxe Python usa `ast.parse` no buffer e navega ao erro sem executar o arquivo.
-- A conversa recebe trechos relevantes e buffer ativo do projeto apenas com `off_grid=true`; contexto limitado a 5.000 caracteres; arquivos sensíveis são ignorados e padrões comuns de segredo são mascarados.
-- Contexto de arquivo é rotulado como dado não confiável; não concede autoridade para execução ou gravação.
-- `uv.lock` fixa dependências; CI usa lockfile em Python 3.11/3.13, Windows/Ubuntu.
-- A implementação está commitada localmente em `04c3af7`; push pendente, sem merge.
+## Próxima ação exata
 
-## Pendências conhecidas
-
-- Busca/substituição avançadas, renomeação/exclusão, terminal, painel inferior de problemas e diagnósticos Ruff/pytest ainda não foram feitos.
-- Contexto lexical é uma primeira fatia; índice incremental, referências entre símbolos, relações entre módulos e tarefas multi-arquivo ainda precisam de validação.
-- Parcial agora também é persistido em timeout/erro com marcador; SQLite configura WAL e busy_timeout, inicializa schema uma vez por processo; UI acessa histórico e CRUD por `AssistantService`.
-- Desenho de segurança de operações do workspace publicado em `WORKSPACE_OPERATIONS_SECURITY.md` e enviado ao Slack para revisão; rename/delete/terminal aguardam essa revisão.
-- MCP aceita referências `${NOME_DA_VARIAVEL}` para segredos autorizados no ambiente, rejeita padrões comuns de segredo literal e não persiste valores; processos ainda reiniciam por operação.
-- O log registra classe da exceção sem traceback para evitar expor texto sensível.
-- O editor inicial não substitui um editor de linguagem completo; realce atual cobre Python básico.
-- Integração Roblox, agentes, memória semântica e distribuição standalone permanecem pendentes.
-- A migração/backup da base de dados foi feita antes de iniciar a interface, sem alteração do histórico.
-
-## Continuação em andamento — validação e CI reproduzível
-
-- `uv.lock` fixa as dependências resolvidas; `uv lock --check` passou.
-- CI atualizado para Python 3.11 e 3.13, Windows e Ubuntu, com instalação e comandos bloqueados pelo lockfile.
-- Validação local: `ruff check .` passou; `pytest -q` — 99 passaram; CLI iniciou e encerrou com `/sair`; `git diff --check` passou; `uv lock --check` passou.
-- Segurança Git: nenhum arquivo `.env` rastreado; CI remota pendente de executar após push.
-
-## Comandos
-
-```powershell
-.venv\Scripts\python.exe -m pytest -q
-.venv\Scripts\python.exe -m ruff check .
-git diff --check
-.venv\Scripts\python.exe -m noite --cli
-```
-
-## Segurança/limites da sessão
-
-- Não fazer commit, push, merge, release ou operação remota sem autorização explícita.
-- Não executar comandos arbitrários recebidos do modelo.
-- Não instalar dependências novas para esta primeira fatia do editor.
+Retomar a Fase 4 de `docs\MASTER_PLAN.md` nos itens de indexação incremental e fluxo de proposta/aprovação/undo para escrita; depois implementar e validar as fases 5–8. Ver `docs\EVOLUTION_PROGRESS.md` para limitações e estado detalhado.

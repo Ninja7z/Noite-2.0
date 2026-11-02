@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import shutil
+import subprocess
 from collections.abc import Callable
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from .activity import ActivityEvent, ActivityState, make_activity_event
 from .config import Settings, get_settings
 from .contracts import IntentKind
 from .router import route
@@ -22,15 +28,89 @@ from .store import (
     rename_conversation,
     set_active_conversation_id,
 )
+from .task_router import route_model
 from .tools import search_workspace
-from .workspace import retrieve_workspace_context
+from .workspace import _redact_secret_values, retrieve_workspace_context
 
 MAX_CONTEXT_CHARS = 6_000
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, round((perf_counter() - started_at) * 1000))
+
+
+def _emit_activity(
+    callback: Callable[[ActivityEvent], None] | None,
+    operation: str,
+    state: ActivityState,
+    summary: str,
+    *,
+    duration_ms: int | None = None,
+    details: str = "",
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(
+            make_activity_event(
+                operation,
+                state,
+                summary,
+                duration_ms=duration_ms,
+                details=details,
+            )
+        )
+    except Exception:
+        # Activity reporting must never break the assistant's actual operation.
+        return
+
+
+def ollama_binary() -> Path | None:
+    """Localiza o executável do Ollama instalado, sem instalá-lo nem iniciá-lo."""
+    found = shutil.which("ollama")
+    if found:
+        return Path(found)
+    local_app = os.environ.get("LOCALAPPDATA")
+    if local_app:
+        candidate = Path(local_app) / "Programs" / "Ollama" / "ollama.exe"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def start_ollama_server(log_dir: Path) -> bool:
+    """Inicia `ollama serve` sob pedido explícito do usuário; retorna o sucesso do disparo."""
+    binary = ollama_binary()
+    if binary is None:
+        return False
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "ollama_serve.log"
+    extra: dict[str, object] = {}
+    if os.name == "nt":
+        extra["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        with log_path.open("ab") as log_file:
+            subprocess.Popen(
+                [str(binary), "serve"],
+                stdout=log_file,
+                stderr=log_file,
+                **extra,
+            )
+    except OSError:
+        return False
+    return True
 
 
 async def ask_local_model(*args, **kwargs) -> str:
     """Carrega LiteLLM sob demanda para não atrasar a abertura da interface."""
     from .model_gateway import ask_local_model as complete
+
+    return await complete(*args, **kwargs)
+
+
+async def ask_glm_model(*args, **kwargs) -> str:
+    """Load the optional external gateway only when a permitted task needs it."""
+    from .model_gateway import ask_glm_model as complete
 
     return await complete(*args, **kwargs)
 
@@ -65,6 +145,69 @@ class AssistantService:
                 return "Ollama conectado" if response.status == 200 else "Ollama indisponível"
         except (OSError, URLError):
             return "Ollama desconectado"
+
+    def model_diagnostics(self) -> dict[str, object]:
+        """Inspeciona o servidor local e a presença do modelo sem travar a interface."""
+        endpoint = self.settings.ollama_base_url.rstrip("/") + "/api/tags"
+        info: dict[str, object] = {
+            "server": "down",
+            "endpoint": self.settings.ollama_base_url,
+            "model": self.model,
+            "model_installed": None,
+            "installed_models": [],
+            "message": (
+                "Ollama desconectado. Abra o aplicativo do Ollama ou execute "
+                '"ollama serve" e verifique novamente.'
+            ),
+        }
+        try:
+            with urlopen(endpoint, timeout=2) as response:
+                payload = json.loads(response.read().decode("utf-8", "replace"))
+        except (OSError, URLError, ValueError):
+            return info
+        installed = sorted(
+            str(entry.get("name", "")).strip()
+            for entry in payload.get("models", [])
+            if isinstance(entry, dict)
+        )
+        installed = [name for name in installed if name]
+        model_details = []
+        for entry in payload.get("models", []):
+            if not isinstance(entry, dict):
+                continue
+            details = entry.get("details") if isinstance(entry.get("details"), dict) else {}
+            model_details.append(
+                {
+                    "name": str(entry.get("name", "")).strip(),
+                    "size_bytes": entry.get("size") if isinstance(entry.get("size"), int) else None,
+                    "family": str(details.get("family", "")),
+                    "parameter_size": str(details.get("parameter_size", "")),
+                    "quantization": str(details.get("quantization_level", "")),
+                    "format": str(details.get("format", "")),
+                }
+            )
+        base_name = self.model.split(":", 1)[0]
+        model_installed = self.model in installed or (
+            base_name != "" and any(name.split(":", 1)[0] == base_name for name in installed)
+        )
+        if model_installed:
+            message = (
+                f"Ollama conectado em {self.settings.ollama_base_url}. "
+                f"Modelo {self.model} pronto para uso."
+            )
+        else:
+            message = (
+                f"Ollama conectado, mas o modelo {self.model} não está instalado. "
+                f"Execute: ollama pull {self.model}"
+            )
+        info.update(
+            server="up",
+            model_installed=model_installed,
+            installed_models=installed,
+            model_details=model_details,
+            message=message,
+        )
+        return info
 
     def quick_response(self, text: str) -> str | None:
         normalized = text.strip().casefold().rstrip(".!?,")
@@ -153,6 +296,7 @@ class AssistantService:
         project_root: Path | None = None,
         active_file: str | None = None,
         active_text: str | None = None,
+        on_activity: Callable[[ActivityEvent], None] | None = None,
     ) -> str:
         intent = route(text)
         quick = self.quick_response(intent.normalized_text)
@@ -178,8 +322,44 @@ class AssistantService:
                 answer = f"O espaço de trabalho configurado não existe: {workspace}."
                 self._save_turn(conversation_id, text, answer)
                 return answer
-            matches = await asyncio.to_thread(
-                search_workspace, workspace, intent.parameters["query"]
+            started_at = perf_counter()
+            _emit_activity(
+                on_activity,
+                "Busca no workspace",
+                "started",
+                "Pesquisa iniciada",
+                details=f"Projeto: {workspace.name}",
+            )
+            try:
+                matches = await asyncio.to_thread(
+                    search_workspace, workspace, intent.parameters["query"]
+                )
+            except asyncio.CancelledError:
+                _emit_activity(
+                    on_activity,
+                    "Busca no workspace",
+                    "cancelled",
+                    "Pesquisa cancelada",
+                    duration_ms=_elapsed_ms(started_at),
+                )
+                raise
+            except Exception as exc:
+                _emit_activity(
+                    on_activity,
+                    "Busca no workspace",
+                    "failed",
+                    "Pesquisa não concluída",
+                    duration_ms=_elapsed_ms(started_at),
+                    details=f"Falha do tipo {type(exc).__name__}.",
+                )
+                raise
+            _emit_activity(
+                on_activity,
+                "Busca no workspace",
+                "completed",
+                f"Pesquisa concluída · {len(matches)} resultado(s)",
+                duration_ms=_elapsed_ms(started_at),
+                details=f"Projeto: {workspace.name}",
             )
             if matches:
                 answer = "Encontrei estes nomes no espaço autorizado:\n" + "\n".join(matches)
@@ -210,12 +390,52 @@ class AssistantService:
             {"role": "user", "content": intent.normalized_text},
         ]
         if project_root is not None and self.settings.off_grid:
-            project_context = await asyncio.to_thread(
-                retrieve_workspace_context,
-                project_root,
-                intent.normalized_text,
-                active_file=active_file,
-                active_text=active_text,
+            started_at = perf_counter()
+            _emit_activity(
+                on_activity,
+                "Contexto do projeto",
+                "started",
+                "Selecionando contexto do projeto",
+                details=f"Projeto: {Path(project_root).name}",
+            )
+            try:
+                project_context = await asyncio.to_thread(
+                    retrieve_workspace_context,
+                    project_root,
+                    intent.normalized_text,
+                    active_file=active_file,
+                    active_text=active_text,
+                )
+            except asyncio.CancelledError:
+                _emit_activity(
+                    on_activity,
+                    "Contexto do projeto",
+                    "cancelled",
+                    "Seleção de contexto cancelada",
+                    duration_ms=_elapsed_ms(started_at),
+                )
+                raise
+            except Exception as exc:
+                _emit_activity(
+                    on_activity,
+                    "Contexto do projeto",
+                    "failed",
+                    "Não foi possível preparar o contexto",
+                    duration_ms=_elapsed_ms(started_at),
+                    details=f"Falha do tipo {type(exc).__name__}.",
+                )
+                raise
+            _emit_activity(
+                on_activity,
+                "Contexto do projeto",
+                "completed",
+                "Contexto do projeto preparado",
+                duration_ms=_elapsed_ms(started_at),
+                details=(
+                    f"{len(project_context)} caracteres selecionados."
+                    if project_context
+                    else "Nenhum trecho relevante foi selecionado."
+                ),
             )
             if project_context:
                 messages.insert(
@@ -231,6 +451,14 @@ class AssistantService:
                         ),
                     },
                 )
+        model_route = route_model(intent.normalized_text, self.settings)
+        # Redact at the model boundary: this covers history, current input, system
+        # text, and project context without changing the SQLite source of truth.
+        messages = [
+            {**message, "content": _redact_secret_values(message["content"])}
+            for message in messages
+        ]
+        safe_prompt = messages[-1]["content"]
         partial: list[str] = []
 
         def collect_chunk(chunk: str) -> None:
@@ -238,18 +466,81 @@ class AssistantService:
             if on_chunk is not None:
                 on_chunk(chunk)
 
+        async def request_model(provider: str) -> str:
+            label = "GLM" if provider == "glm" else "Ollama local"
+            operation = f"Chamada ao modelo · {label}"
+            started_at = perf_counter()
+            _emit_activity(
+                on_activity,
+                operation,
+                "started",
+                f"Consultando {label}",
+                details=f"Categoria: {model_route.category.value}",
+            )
+            try:
+                if provider == "glm":
+                    if on_chunk is None:
+                        result = await ask_glm_model(
+                            safe_prompt,
+                            category=model_route.category.value,
+                        )
+                    else:
+                        result = await ask_glm_model(
+                            safe_prompt,
+                            category=model_route.category.value,
+                            on_chunk=collect_chunk,
+                        )
+                elif on_chunk is None:
+                    result = await ask_local_model(
+                        safe_prompt, messages=messages, model=self.model
+                    )
+                else:
+                    result = await ask_local_model(
+                        safe_prompt,
+                        messages=messages,
+                        model=self.model,
+                        on_chunk=collect_chunk,
+                    )
+            except asyncio.CancelledError:
+                _emit_activity(
+                    on_activity,
+                    operation,
+                    "cancelled",
+                    f"Chamada a {label} cancelada",
+                    duration_ms=_elapsed_ms(started_at),
+                )
+                raise
+            except Exception as exc:
+                _emit_activity(
+                    on_activity,
+                    operation,
+                    "failed",
+                    f"Chamada a {label} falhou",
+                    duration_ms=_elapsed_ms(started_at),
+                    details=f"Falha do tipo {type(exc).__name__}.",
+                )
+                raise
+            _emit_activity(
+                on_activity,
+                operation,
+                "completed",
+                f"Resposta recebida de {label}",
+                duration_ms=_elapsed_ms(started_at),
+                details=f"Categoria: {model_route.category.value}",
+            )
+            return result
+
         try:
-            if on_chunk is None:
-                answer = await ask_local_model(
-                    intent.normalized_text, messages=messages, model=self.model
-                )
+            if model_route.provider == "glm":
+                try:
+                    answer = await request_model("glm")
+                except Exception:
+                    if partial:
+                        raise
+                    # A remote outage may fall back to the local model only.
+                    answer = await request_model("local")
             else:
-                answer = await ask_local_model(
-                    intent.normalized_text,
-                    messages=messages,
-                    model=self.model,
-                    on_chunk=collect_chunk,
-                )
+                answer = await request_model("local")
         except asyncio.CancelledError:
             if partial:
                 self._save_turn(

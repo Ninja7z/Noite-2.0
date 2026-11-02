@@ -1,5 +1,6 @@
 param(
     [string]$Python = ".venv\Scripts\python.exe",
+    [string]$Name = "Noite",
     [switch]$CopyToDesktop
 )
 
@@ -12,22 +13,24 @@ if (-not (Test-Path -LiteralPath $PythonPath)) {
 
 Push-Location $Root
 try {
-    $BuildDir = Join-Path $Root "build\launcher"
+    $BuildDir = Join-Path $Root "build\launcher-$Name"
     New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
     $ConfigModule = Join-Path $BuildDir "noite_path_placeholder.py"
     $PythonRoot = $Root.Replace("\", "\\")
     Set-Content -LiteralPath $ConfigModule -Value "PROJECT_ROOT = r'$PythonRoot'" -Encoding utf8
     $Source = Join-Path $Root "packaging\noite_bootstrap.py"
     $Dist = Join-Path $Root "dist"
-    $Work = Join-Path $Root "build\pyinstaller"
-    & $PythonPath -m PyInstaller --noconfirm --onefile --windowed --clean --name Noite --paths $BuildDir --specpath $BuildDir --distpath $Dist --workpath $Work $Source
+    $Work = Join-Path $Root "build\pyinstaller-$Name"
+    $Icon = Join-Path $Root "assets\noite.ico"
+    if (-not (Test-Path -LiteralPath $Icon)) { throw "Ícone da Noite não encontrado: $Icon" }
+    & $PythonPath -m PyInstaller --noconfirm --onefile --windowed --clean --name $Name --icon $Icon --paths $BuildDir --specpath $BuildDir --distpath $Dist --workpath $Work $Source
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller terminou com código $LASTEXITCODE." }
-    $Exe = Join-Path $Root "dist\Noite.exe"
+    $Exe = Join-Path $Root "dist\$Name.exe"
     if (-not (Test-Path -LiteralPath $Exe)) { throw "Artefato não encontrado: $Exe" }
     if ($CopyToDesktop) {
         $Desktop = [Environment]::GetFolderPath("Desktop")
-        Copy-Item -LiteralPath $Exe -Destination (Join-Path $Desktop "Noite.exe") -Force
-        Write-Output "Executável copiado para $(Join-Path $Desktop 'Noite.exe')"
+        Copy-Item -LiteralPath $Exe -Destination (Join-Path $Desktop "$Name.exe") -Force
+        Write-Output "Executável copiado para $(Join-Path $Desktop "$Name.exe")"
     } else {
         Write-Output "Executável criado em $Exe"
     }

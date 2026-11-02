@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from noite.workspace import (
+    _redact_secret_values,
     create_workspace_directory,
     create_workspace_file,
     read_workspace_text,
@@ -44,7 +45,7 @@ def test_allow_env_example_template(tmp_path):
     example = tmp_path / ".env.example"
     example.write_text("NOITE_MODEL=qwen2.5:3b\n", encoding="utf-8")
 
-    assert read_workspace_text(tmp_path, example).text == "NOITE_MODEL=qwen2.5:3b\r\n"
+    assert read_workspace_text(tmp_path, example).text.splitlines() == ["NOITE_MODEL=qwen2.5:3b"]
 
 
 def test_reject_save_after_external_change(tmp_path):
@@ -129,6 +130,290 @@ def test_project_context_selects_relevant_files_and_excludes_secrets(tmp_path):
     assert "[REDACTED]" in context
     assert "unrelated notes" not in context
     assert len(context) <= 5_000
+
+
+def test_project_context_redacts_provider_secrets_and_bearer_tokens(tmp_path):
+    source = tmp_path / "settings.py"
+    secret = "synthetic-review-secret-value-123"
+    source.write_text(
+        f'AWS_SECRET_ACCESS_KEY = "{secret}"\n'
+        'GITLAB_TOKEN=abc1234\n'
+        'Authorization: Bearer synthetic-bearer-value-123\n',
+        encoding="utf-8",
+    )
+
+    context = retrieve_workspace_context(tmp_path, "AWS_SECRET_ACCESS_KEY GITLAB_TOKEN")
+
+    assert secret not in context
+    assert "abc1234" not in context
+    assert "synthetic-bearer-value-123" not in context
+    bearer_context = retrieve_workspace_context(tmp_path, "Authorization Bearer")
+    assert "synthetic-bearer-value-123" not in bearer_context
+    assert "[REDACTED]" in bearer_context
+    assert context.count("[REDACTED]") >= 2
+
+
+def test_redacts_secret_formats_from_review_and_preserves_public_values():
+    secrets = [
+        ("DB_PASSWORD=synthetic-db-password", "synthetic-db-password"),
+        (
+            "sk-proj-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "sk-proj-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        ),
+        ("Authorization: Bearer synthetic-bearer-token-value", "synthetic-bearer-token-value"),
+        (
+            "-----BEGIN PRIVATE KEY-----\nsynthetic-pem-private-material\n"
+            "-----END PRIVATE KEY-----",
+            "synthetic-pem-private-material",
+        ),
+        (
+            "DATABASE_URL=postgres://synthetic-user:synthetic-url-password@db.example/app",
+            "synthetic-url-password",
+        ),
+    ]
+    for content, secret in secrets:
+        redacted = _redact_secret_values(content)
+        assert secret not in redacted
+        assert "[REDACTED" in redacted
+
+    public = (
+        "max_tokens = 4096\n"
+        "token = None\n"
+        "tokenizer_name = 'bert-base'\n"
+        "PUBLIC_URL=https://example.test/path?theme=dark&lang=pt\n"
+        "CLIENT_ID=public-application-id\n"
+    )
+    assert _redact_secret_values(public) == public
+    assert _redact_secret_values(
+        "DB_PASSWORD=synthetic-db-password # keep this note\n"
+    ) == "DB_PASSWORD=[REDACTED] # keep this note\n"
+
+
+@pytest.mark.parametrize(
+    ("text", "secret"),
+    [
+        (
+            "Prefix Authorization: Token synthetic-auth-token-123 suffix",
+            "synthetic-auth-token-123",
+        ),
+        (
+            "A frase password=synthetic phrase password with spaces continua",
+            "synthetic phrase password with spaces continua",
+        ),
+        (
+            "JWT eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturevalue",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturevalue",
+        ),
+        (
+            "https://db%40label:synthetic-url-password@host.example/path",
+            "synthetic-url-password",
+        ),
+    ],
+)
+def test_redacts_inline_auth_formats_and_values_with_spaces(text, secret):
+    redacted = _redact_secret_values(text)
+    assert secret not in redacted
+    assert "[REDACTED" in redacted
+
+
+@pytest.mark.parametrize(
+    ("filename", "content", "query", "secret"),
+    [
+        (
+            "database_url.txt",
+            "DATABASE_URL=postgres://user:synthetic-db-pass@db/one",
+            "database url",
+            "synthetic-db-pass",
+        ),
+        (
+            "private_key.txt",
+            "PRIVATE_KEY=synthetic-private-key-material",
+            "private key",
+            "synthetic-private-key-material",
+        ),
+        (
+            "client_secret.txt",
+            "CLIENT_SECRET='synthetic-client-secret-value'",
+            "client secret",
+            "synthetic-client-secret-value",
+        ),
+        (
+            "aws_secret.txt",
+            "AWS_SECRET_ACCESS_KEY=synthetic-aws-access-key",
+            "aws secret access",
+            "synthetic-aws-access-key",
+        ),
+        (
+            "gitlab_token.txt",
+            "GITLAB_TOKEN=synthetic-gitlab-token",
+            "gitlab token",
+            "synthetic-gitlab-token",
+        ),
+        (
+            "api_key.txt",
+            'API_KEY="synthetic-api-key-value"',
+            "api key",
+            "synthetic-api-key-value",
+        ),
+        (
+            "authorization.txt",
+            "Authorization: Bearer synthetic-bearer-token",
+            "authorization bearer",
+            "synthetic-bearer-token",
+        ),
+        (
+            "pem_key.txt",
+            "-----BEGIN PRIVATE KEY-----\nsynthetic-pem-material\n-----END PRIVATE KEY-----",
+            "private key",
+            "synthetic-pem-material",
+        ),
+        (
+            "encrypted_key.txt",
+            "-----BEGIN ENCRYPTED PRIVATE KEY-----\n"
+            "synthetic-encrypted-key\n"
+            "-----END ENCRYPTED PRIVATE KEY-----",
+            "encrypted private key",
+            "synthetic-encrypted-key",
+        ),
+        (
+            "rsa_key.txt",
+            "-----BEGIN RSA PRIVATE KEY-----\nsynthetic-rsa-key\n-----END RSA PRIVATE KEY-----",
+            "rsa private key",
+            "synthetic-rsa-key",
+        ),
+        (
+            "dsa_key.txt",
+            "-----BEGIN DSA PRIVATE KEY-----\nsynthetic-dsa-key\n-----END DSA PRIVATE KEY-----",
+            "dsa private key",
+            "synthetic-dsa-key",
+        ),
+        (
+            "basic_auth.txt",
+            "Authorization: Basic c3ludGhldGljLWJhc2ljLWNyZWRlbnRpYWw=",
+            "authorization basic",
+            "c3ludGhldGljLWJhc2ljLWNyZWRlbnRpYWw=",
+        ),
+        (
+            "query_password.txt",
+            "DATABASE_URL=postgres://db/app?password=synthetic-query-password&sslmode=require",
+            "database url",
+            "synthetic-query-password",
+        ),
+        (
+            "query_token.txt",
+            "DATABASE_URL=postgres://db/app?token=synthetic-query-token&application_name=noite",
+            "database url",
+            "synthetic-query-token",
+        ),
+        (
+            "client_id.txt",
+            "CLIENT_ID=synthetic-client-id-secret # credential",
+            "client id credential",
+            "synthetic-client-id-secret",
+        ),
+    ],
+)
+def test_context_redacts_common_credential_formats(tmp_path, filename, content, query, secret):
+    (tmp_path / filename).write_text(content, encoding="utf-8")
+    context = retrieve_workspace_context(tmp_path, query)
+    assert secret not in context
+
+
+def test_redaction_preserves_public_config_urls_and_non_sensitive_suffixes(tmp_path):
+    source = tmp_path / "public_config.txt"
+    source.write_text(
+        "PUBLIC_URL=https://example.test/path?theme=dark&lang=pt\n"
+        "CLIENT_ID=public-application-id\n"
+        "PORT=8080 # keep this comment\n"
+        "FEATURE_FLAG=true\n",
+        encoding="utf-8",
+    )
+    context = retrieve_workspace_context(
+        tmp_path, "public config url client id port feature flag"
+    )
+    assert "https://example.test/path?theme=dark&lang=pt" in context
+    assert "public-application-id" in context
+    assert "# keep this comment" in context
+    assert "FEATURE_FLAG=true" in context
+
+
+def test_redaction_preserves_non_sensitive_url_userinfo(tmp_path):
+    source = tmp_path / "url_notes.txt"
+    source.write_text(
+        "https://label@example.test/path?theme=dark&lang=pt\n",
+        encoding="utf-8",
+    )
+    context = retrieve_workspace_context(tmp_path, "url notes theme")
+    assert "https://label@example.test/path?theme=dark&lang=pt" in context
+
+
+@pytest.mark.parametrize(
+    ("content", "secret"),
+    [
+        (
+            'Authorization: password="synthetic password with many words"',
+            "synthetic password with many words",
+        ),
+        (
+            'prefix text. password="synthetic inline secret phrase". suffix text',
+            "synthetic inline secret phrase",
+        ),
+    ],
+)
+def test_redacts_quoted_credentials_with_spaces_inside_larger_text(tmp_path, content, secret):
+    source = tmp_path / "authorization_notes.txt"
+    source.write_text(content, encoding="utf-8")
+    context = retrieve_workspace_context(tmp_path, "authorization password prefix suffix")
+    assert secret not in context
+
+
+def test_url_redacts_userinfo_with_password_but_preserves_public_username(tmp_path):
+    source = tmp_path / "url_notes.txt"
+    source.write_text(
+        "https://public-label@safe.example/path\n"
+        "https://name:synthetic-url-password@db.example:5432/app?sslmode=require\n",
+        encoding="utf-8",
+    )
+    context = retrieve_workspace_context(tmp_path, "url credentials public label sslmode")
+    assert "public-label@safe.example" in context
+    assert "synthetic-url-password" not in context
+    assert "db.example:5432/app?sslmode=require" in context
+
+
+def test_url_with_invalid_port_still_redacts_userinfo(tmp_path):
+    source = tmp_path / "database_url_notes.txt"
+    source.write_text(
+        "https://usuario:synthetic-invalid-port-password@servidor:porta-invalida/banco",
+        encoding="utf-8",
+    )
+    context = retrieve_workspace_context(tmp_path, "database url banco servidor")
+    assert "synthetic-invalid-port-password" not in context
+    assert "[REDACTED]@servidor:porta-invalida/banco" in context
+
+
+def test_malformed_ipv6_url_still_redacts_userinfo(tmp_path):
+    source = tmp_path / "ipv6_url_notes.txt"
+    source.write_text(
+        "https://usuario:synthetic-malformed-ipv6-password@[::1/caminho",
+        encoding="utf-8",
+    )
+    context = retrieve_workspace_context(tmp_path, "ipv6 url caminho")
+    assert "synthetic-malformed-ipv6-password" not in context
+    assert "https://[REDACTED]@[::1/caminho" in context
+
+
+def test_workspace_search_and_context_do_not_follow_external_directory_symlink(tmp_path):
+    external = tmp_path.parent / f"{tmp_path.name}-external"
+    external.mkdir()
+    (external / "outside.py").write_text("needle external_secret_123456", encoding="utf-8")
+    link = tmp_path / "linked"
+    try:
+        link.symlink_to(external, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("Directory symlinks unavailable")
+
+    assert search_workspace_text(tmp_path, "needle") == []
+    assert "external_secret_123456" not in retrieve_workspace_context(tmp_path, "needle")
 
 
 def test_create_file_and_directory_without_overwriting(tmp_path):
