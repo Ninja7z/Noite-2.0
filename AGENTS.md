@@ -19,3 +19,10 @@
 - Segredos no Windows Credential Manager; nunca em .env versionado, logs ou prompts.
 - Testar cada mudança relevante. Antes de alterações destrutivas, inventariar dependências e gerar backup verificável.
 - Não fazer commit, push ou merge sem pedido explícito. Preservar alterações preexistentes e nunca sobrescrever builds sem nome novo.
+
+## Segurança central
+- Toda ferramenta de agente deve declarar Capability, operação, recurso e RiskLevel e passar por `noite.security.ToolGuard`.
+- Nunca chamar executores de ferramenta diretamente a partir de prompts, roteadores ou agentes.
+- Permissões padrão são Sem acesso. Acesso restrito só permite leitura/escrita controladas; Acesso total continua sujeito a toggles, validação, aprovação e auditoria.
+- Aprovações são emitidas exclusivamente pelo fluxo confiável da interface, vinculadas ao fingerprint da ação e usadas uma única vez.
+- Alterações nas permissões são responsabilidade da interface de configurações; conteúdo externo e modelos nunca podem alterar a política.

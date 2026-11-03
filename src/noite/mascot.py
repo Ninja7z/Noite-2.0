@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import ctypes.wintypes
 import html
 import logging
+import threading
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRect, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtCore import QPoint, QRect, QSettings, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import (
+    QCloseEvent,
+    QColor,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+)
 from PySide6.QtWidgets import (
     QApplication,
-    QFrame,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QPushButton,
     QSizePolicy,
@@ -27,8 +34,15 @@ from .logging_setup import setup_logging
 
 logger = logging.getLogger("noite.mascot")
 
+SETTINGS_ORGANIZATION = "Noite2"
+SETTINGS_APPLICATION = "Mascot"
+DIAGNOSTICS_INTERVAL_MS = 30_000
+IDLE_RETURN_MS = 2600
+
 
 class AssistantWorker(QThread):
+    """Executa AssistantService.respond em uma thread separada da thread visual."""
+
     chunk = Signal(str)
     activity = Signal(object)
     completed = Signal(str)
@@ -39,6 +53,11 @@ class AssistantWorker(QThread):
         self.service = service
         self.conversation_id = conversation_id
         self.prompt = prompt
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Sinaliza cancelamento; emissões subsequentes são ignoradas."""
+        self._cancelled = True
 
     def run(self) -> None:
         try:
@@ -46,18 +65,33 @@ class AssistantWorker(QThread):
                 self.service.respond(
                     self.prompt,
                     conversation_id=self.conversation_id,
-                    on_chunk=self.chunk.emit,
-                    on_activity=self.activity.emit,
+                    on_chunk=self._emit_chunk,
+                    on_activity=self._emit_activity,
                 )
             )
-            self.completed.emit(answer)
+            if not self._cancelled:
+                self.completed.emit(answer)
         except Exception as exc:
-            logger.error("Mascot request failed (%s)", type(exc).__name__)
-            self.failed.emit(f"Não consegui concluir. Falha: {type(exc).__name__}.")
+            if not self._cancelled:
+                logger.error("Mascot request failed (%s)", type(exc).__name__)
+                self.failed.emit(f"Não consegui concluir. Falha: {type(exc).__name__}.")
+
+    def _emit_chunk(self, text: str) -> None:
+        if self._cancelled:
+            return
+        self.chunk.emit(text)
+
+    def _emit_activity(self, event: ActivityEvent) -> None:
+        if self._cancelled:
+            return
+        self.activity.emit(event)
 
 
 class DiagnosticsWorker(QThread):
-    completed = Signal(object)
+    """Inspeciona Ollama e o modelo fora da thread visual."""
+
+    completed = Signal(dict)
+    failed = Signal(str)
 
     def __init__(self, service: AssistantService):
         super().__init__()
@@ -67,11 +101,85 @@ class DiagnosticsWorker(QThread):
         try:
             self.completed.emit(self.service.model_diagnostics())
         except Exception as exc:
-            self.completed.emit({"server": "down", "message": type(exc).__name__})
+            self.failed.emit(type(exc).__name__)
+
+
+class GlobalHotkeyWorker(QThread):
+    """Registra Alt+C globalmente no Windows sem bloquear a interface."""
+
+    activated = Signal()
+    registration_failed = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._thread_id = 0
+        self._ready = threading.Event()
+
+    def run(self) -> None:
+        if not hasattr(ctypes, "windll"):
+            self._ready.set()
+            self.registration_failed.emit("Atalho global disponível apenas no Windows.")
+            return
+        user32 = ctypes.windll.user32
+        from ctypes import wintypes
+
+        user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+        user32.RegisterHotKey.restype = wintypes.BOOL
+        user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.GetMessageW.argtypes = [
+            ctypes.POINTER(wintypes.MSG),
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.UINT,
+        ]
+        user32.GetMessageW.restype = ctypes.c_int
+        user32.PeekMessageW.argtypes = [
+            ctypes.POINTER(wintypes.MSG),
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.UINT,
+            wintypes.UINT,
+        ]
+        user32.PeekMessageW.restype = wintypes.BOOL
+        self._thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
+        if not user32.RegisterHotKey(None, 0x4E32, 0x0001, 0x43):
+            self._ready.set()
+            self.registration_failed.emit("Não foi possível registrar Alt+C.")
+            return
+        msg = wintypes.MSG()
+        # Garante que a fila de mensagens exista antes de outro thread enviar WM_QUIT.
+        user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)
+        self._ready.set()
+        try:
+            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                if msg.message == 0x0312 and msg.wParam == 0x4E32:
+                    self.activated.emit()
+        finally:
+            user32.UnregisterHotKey(None, 0x4E32)
+
+    def stop(self) -> bool:
+        if not self.isRunning():
+            return True
+        self._ready.wait(1.0)
+        if self._thread_id:
+            user32 = ctypes.windll.user32
+            user32.PostThreadMessageW.argtypes = [
+                ctypes.wintypes.DWORD,
+                ctypes.wintypes.UINT,
+                ctypes.wintypes.WPARAM,
+                ctypes.wintypes.LPARAM,
+            ]
+            user32.PostThreadMessageW.restype = ctypes.wintypes.BOOL
+            if not user32.PostThreadMessageW(self._thread_id, 0x0012, 0, 0):
+                logger.warning("Não foi possível enviar WM_QUIT à thread do atalho global.")
+        return self.wait(2000)
 
 
 class MascotFace(QWidget):
-    """Original pixel-art robot face. Drawn from integer pixel clusters."""
+    """Visual do mascote; a animação é leve e controlada por estados."""
+
+    # States: idle, working, thinking, error, done, angry, dizzy, listening
+    state_changed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -82,7 +190,7 @@ class MascotFace(QWidget):
         self._phase = 0
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._animate)
-        self.timer.start(650)
+        self.timer.start(900)
 
     def set_state(self, state: str) -> None:
         self.state = state
@@ -91,6 +199,11 @@ class MascotFace(QWidget):
     def _animate(self) -> None:
         self._phase = (self._phase + 1) % 8
         self._blink = self._phase == 0
+        self.update()
+
+    def _set_state(self, state: str, label: str = "") -> None:
+        self.state = state
+        self.state_changed.emit(state)
         self.update()
 
     def paintEvent(self, _event) -> None:
@@ -172,11 +285,10 @@ class MascotFace(QWidget):
         px(14, 27, 5, 1, "#aebde0")
         # Small status pixel on chest.
         px(12, 24, 2, 1, eye)
-        painter.end()
 
 
 class MascotWindow(QWidget):
-    """Floating Noite companion with a compact chat/activity panel."""
+    """Floating Noite companion without a background window."""
 
     def __init__(self, service: AssistantService):
         super().__init__()
@@ -185,9 +297,8 @@ class MascotWindow(QWidget):
         self.worker: AssistantWorker | None = None
         self.diagnostics_worker: DiagnosticsWorker | None = None
         self._drag_offset: QPoint | None = None
-        self._drag_start_position: QPoint | None = None
         self._close_pending = False
-        self._stream_text = ""
+        self._streamed_any = False
         self._state = "idle"
         self.setObjectName("noiteMascotWindow")
         self.setWindowTitle("Noite 2.0")
@@ -197,67 +308,37 @@ class MascotWindow(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setMinimumWidth(180)
-        self.setMaximumWidth(390)
-        self.setFixedWidth(180)
-        self.setMinimumHeight(180)
-        self.setStyleSheet("""
-            QWidget#noiteMascotWindow { background: transparent; color: #eef5ff; }
-            QFrame#shell { background: #111827; border: 1px solid #344b70; border-radius: 18px; }
-            QLabel#title { color: #f2f7ff; font-size: 13px; font-weight: 700; }
-            QLabel#status { color: #8fa9ce; font-size: 10px; }
-            QLabel#activity { color: #8bdfff; font-size: 10px; }
-            QTextBrowser { background: #0b1220; border: 1px solid #293c5a; border-radius: 10px;
-                color: #dce9ff; padding: 8px; font-size: 11px; }
-            QLineEdit { background: #0b1220; border: 1px solid #354b70; border-radius: 11px;
-                padding: 8px 10px; color: #f2f7ff; }
-            QPushButton { background: #20375a; border: 1px solid #3b5c89; border-radius: 10px;
-                color: #f2f7ff; padding: 6px 10px; }
-            QPushButton:hover { background: #2d4d79; }
-            QPushButton#close {
-                background: transparent; border: 0; color: #9eb4d5; font-size: 15px;
-            }
-        """)
+        self.setFixedSize(136, 136)
         self._build_ui()
-        self._restore_position()
-        self._set_state("idle", "Pronta")
-        self.refresh_diagnostics()
         self.diagnostics_timer = QTimer(self)
         self.diagnostics_timer.timeout.connect(self.refresh_diagnostics)
-        self.diagnostics_timer.start(30_000)
+        self.diagnostics_timer.stop()
+        self._restore_position()
+        self._set_state("idle")
+        # Qt's offscreen platform is used by automated tests; don't register
+        # a native OS hotkey from a headless test process.
+        if QApplication.platformName().casefold() != "offscreen":
+            self.hotkey = GlobalHotkeyWorker(self)
+            self.hotkey.activated.connect(self.toggle_visibility)
+            self.hotkey.registration_failed.connect(lambda reason: logger.warning(reason))
+            self.hotkey.start()
 
     def _build_ui(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        self.shell = QFrame()
-        self.shell.setObjectName("shell")
-        outer.addWidget(self.shell)
-        self.layout = QVBoxLayout(self.shell)
-        self.layout.setContentsMargins(10, 9, 10, 10)
-        self.layout.setSpacing(7)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(0)
 
+        # Top bar: face.
         top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(0)
         self.face = MascotFace()
-        self.face.setFixedSize(124, 124)
+        self.face.setFixedSize(136, 136)
         top.addWidget(self.face)
         top.addStretch(1)
-        self.close_button = QPushButton("×")
-        self.close_button.setObjectName("close")
-        self.close_button.setFixedSize(25, 25)
-        self.close_button.setToolTip("Sair da Noite")
-        self.close_button.clicked.connect(self.close)
-        top.addWidget(self.close_button, 0, Qt.AlignmentFlag.AlignTop)
         self.layout.addLayout(top)
-        self.status = QLabel("Iniciando…")
-        self.status.setObjectName("status")
-        self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.activity = QLabel("Aguardando")
-        self.activity.setObjectName("activity")
-        self.activity.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.activity.setWordWrap(True)
-        self.layout.addWidget(self.status)
-        self.layout.addWidget(self.activity)
 
+        # Collapsible chat panel.
         self.panel = QWidget()
         panel_layout = QVBoxLayout(self.panel)
         panel_layout.setContentsMargins(0, 0, 0, 0)
@@ -277,12 +358,6 @@ class MascotWindow(QWidget):
         compose.addWidget(self.input, 1)
         compose.addWidget(self.send_button)
         panel_layout.addLayout(compose)
-        controls = QHBoxLayout()
-        self.hide_panel_button = QPushButton("Recolher")
-        self.hide_panel_button.clicked.connect(self.collapse)
-        controls.addStretch(1)
-        controls.addWidget(self.hide_panel_button)
-        panel_layout.addLayout(controls)
         self.layout.addWidget(self.panel)
         self.panel.hide()
         self._expanded = False
@@ -291,9 +366,7 @@ class MascotWindow(QWidget):
         self.face.mouseReleaseEvent = self._face_release
 
     def _restore_position(self) -> None:
-        from PySide6.QtCore import QSettings
-
-        settings = QSettings("Noite2", "Mascot")
+        settings = QSettings(SETTINGS_ORGANIZATION, SETTINGS_APPLICATION)
         x = settings.value("x", None)
         y = settings.value("y", None)
         if x is not None and y is not None:
@@ -304,61 +377,79 @@ class MascotWindow(QWidget):
             self.move(area.right() - 175, area.bottom() - 180)
 
     def _save_position(self) -> None:
-        from PySide6.QtCore import QSettings
-
-        settings = QSettings("Noite2", "Mascot")
+        settings = QSettings(SETTINGS_ORGANIZATION, SETTINGS_APPLICATION)
         settings.setValue("x", self.x())
         settings.setValue("y", self.y())
+        settings.setValue("collapsed", "true" if not self._expanded else "false")
 
-    def _face_pressed(self, event) -> None:
+    def _face_pressed(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            self._drag_start_position = self.pos()
             event.accept()
         elif event.button() == Qt.MouseButton.RightButton:
-            self.close()
+            self.toggle_panel()
+            event.accept()
 
-    def _face_move(self, event) -> None:
+    def _face_move(self, event: QMouseEvent) -> None:
         if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
             self.move(event.globalPosition().toPoint() - self._drag_offset)
             event.accept()
 
-    def _face_release(self, event) -> None:
-        start = self._drag_start_position
+    def _face_release(self, event: QMouseEvent) -> None:
         self._drag_offset = None
-        self._drag_start_position = None
-        if start is not None and (self.pos() - start).manhattanLength() <= 3:
-            self.toggle_panel()
         self._save_position()
         event.accept()
 
-    def mousePressEvent(self, event) -> None:
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
         else:
             super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event) -> None:
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
             self.move(event.globalPosition().toPoint() - self._drag_offset)
             event.accept()
         else:
             super().mouseMoveEvent(event)
 
-    def mouseReleaseEvent(self, event) -> None:
-        self._drag_offset = None
-        self._save_position()
-        super().mouseReleaseEvent(event)
-
     def toggle_panel(self) -> None:
         self.expand() if not self._expanded else self.collapse()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            if self._expanded:
+                self.collapse()
+            else:
+                self.close()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def toggle_visibility(self) -> None:
+        # A API pode ocultar a janela pelo Win32; consulte o estado nativo,
+        # não apenas o estado em cache do QWidget.
+        if hasattr(ctypes, "windll"):
+            user32 = ctypes.windll.user32
+            hwnd = int(self.winId())
+            if user32.IsWindowVisible(hwnd):
+                user32.ShowWindow(hwnd, 0)  # SW_HIDE
+            else:
+                user32.ShowWindow(hwnd, 5)  # SW_SHOW
+                user32.SetForegroundWindow(hwnd)
+            return
+        if self.isVisible():
+            self.hide()
+        else:
+            self.show()
 
     def expand(self) -> None:
         self._expanded = True
         self.panel.show()
-        self.setFixedWidth(370)
-        self.setMinimumHeight(390)
+        self.setMinimumSize(370, 390)
+        self.setMaximumSize(370, 620)
+        self.resize(370, 390)
         self.input.setFocus()
         self.adjustSize()
         screen = (
@@ -369,31 +460,34 @@ class MascotWindow(QWidget):
             x = min(self.x(), area.right() - self.width())
             y = min(self.y(), area.bottom() - self.height())
             self.move(max(area.left(), x), max(area.top(), y))
+        self.diagnostics_timer.start()
+        self._save_position()
 
     def collapse(self) -> None:
         self._expanded = False
         self.panel.hide()
-        self.setFixedWidth(180)
-        self.setMinimumHeight(180)
+        self.setFixedSize(136, 136)
         self.adjustSize()
+        self.diagnostics_timer.stop()
         self._save_position()
 
-    def _set_state(self, state: str, label: str) -> None:
+    def _set_state(self, state: str, label: str = "") -> None:
         self._state = state
         self.face.set_state(state)
-        self.status.setText(label)
 
     def refresh_diagnostics(self) -> None:
+        if not self._expanded:
+            return
         if self.diagnostics_worker is not None:
             try:
                 if self.diagnostics_worker.isRunning():
                     return
             except RuntimeError:
-                pass
-            self.diagnostics_worker = None
+                self.diagnostics_worker = None
         worker = DiagnosticsWorker(self.service)
         self.diagnostics_worker = worker
         worker.completed.connect(self._diagnostics_ready)
+        worker.failed.connect(self._diagnostics_failed)
         worker.finished.connect(self._diagnostics_finished)
         worker.start()
 
@@ -405,16 +499,11 @@ class MascotWindow(QWidget):
             worker.deleteLater()
         self._maybe_close()
 
+    def _diagnostics_failed(self, message: str) -> None:
+        logger.warning("Mascot diagnostics failed (%s)", message)
+
     def _diagnostics_ready(self, info: dict) -> None:
-        if info.get("server") == "up":
-            model = str(info.get("model") or self.service.model)
-            installed = info.get("model_installed")
-            self.status.setText(
-                f"Ollama online · {model}" if installed else "Ollama online · modelo ausente"
-            )
-        else:
-            self.status.setText("Ollama offline")
-            self.activity.setText("Verifique o serviço local")
+        self._diagnostics = dict(info)
 
     def _append_user(self, text: str) -> None:
         self.transcript.append(f'<p style="color:#9ab8e7"><b>Você</b><br>{html.escape(text)}</p>')
@@ -427,9 +516,8 @@ class MascotWindow(QWidget):
         self.input.clear()
         self._append_user(prompt)
         self.transcript.append('<p style="color:#70dcff"><b>Noite</b><br>')
-        self._stream_text = ""
-        self._set_state("thinking", "Pensando…")
-        self.activity.setText("Processando sua mensagem")
+        self._streamed_any = False
+        self._set_state("thinking")
         self.send_button.setEnabled(False)
         self.worker = AssistantWorker(self.service, self.conversation_id, prompt)
         self.worker.chunk.connect(self._receive_chunk)
@@ -440,40 +528,38 @@ class MascotWindow(QWidget):
         self.worker.start()
 
     def _receive_chunk(self, chunk: str) -> None:
-        self._stream_text += chunk
+        self._streamed_any = True
         cursor = self.transcript.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         cursor.insertText(chunk)
         self.transcript.setTextCursor(cursor)
         self.transcript.ensureCursorVisible()
-        self._set_state("working", "Trabalhando…")
+        self._set_state("working")
 
     def _receive_activity(self, event: ActivityEvent) -> None:
-        self.activity.setText(event.summary)
         if event.state == "started":
-            self._set_state("thinking", "Pensando…")
+            self._set_state("thinking")
         elif event.state == "failed":
-            self._set_state("error", "Algo deu errado")
+            self._set_state("error")
         elif event.state == "completed":
-            self._set_state("working", "Finalizando…")
+            self._set_state("working")
 
     def _request_completed(self, answer: str) -> None:
-        if not self._stream_text:
+        if not self._streamed_any:
             cursor = self.transcript.textCursor()
             cursor.movePosition(cursor.MoveOperation.End)
             cursor.insertText(answer)
-        self.transcript.append("</p>")
+        # Removido: self.transcript.append("</p>")
         self.transcript.ensureCursorVisible()
-        self._set_state("done", "Concluído")
-        self.activity.setText("Resposta pronta")
+        self._set_state("done")
         QTimer.singleShot(
-            2600, lambda: self._set_state("idle", "Pronta") if self._state == "done" else None
+            IDLE_RETURN_MS,
+            lambda: self._set_state("idle") if self._state == "done" else None,
         )
 
     def _request_failed(self, message: str) -> None:
         self.transcript.append(f'<p style="color:#ff8aa1">{html.escape(message)}</p>')
-        self._set_state("error", "Falha")
-        self.activity.setText(message)
+        self._set_state("error")
 
     def _worker_finished(self) -> None:
         self.send_button.setEnabled(True)
@@ -494,9 +580,13 @@ class MascotWindow(QWidget):
         if not worker_running and not diagnostics_running:
             self.close()
 
-    def closeEvent(self, event) -> None:
+    def closeEvent(self, event: QCloseEvent) -> None:
         self._save_position()
         self.diagnostics_timer.stop()
+        if hasattr(self, "hotkey") and self.hotkey.isRunning() and not self.hotkey.stop():
+            event.ignore()
+            QTimer.singleShot(100, self.close)
+            return
         worker_running = self.worker is not None and self.worker.isRunning()
         diagnostics_running = (
             self.diagnostics_worker is not None and self.diagnostics_worker.isRunning()
@@ -504,7 +594,6 @@ class MascotWindow(QWidget):
         if worker_running or diagnostics_running:
             self._close_pending = True
             self.setEnabled(False)
-            self.activity.setText("Finalizando a operação local antes de sair…")
             event.ignore()
             return
         event.accept()

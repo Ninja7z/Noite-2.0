@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+import secrets
+import time
+from dataclasses import dataclass
+
+from .models import ActionRequest
+
+
+@dataclass(frozen=True)
+class ApprovalGrant:
+    token: str
+    fingerprint: str
+    expires_at: float
+
+
+class ApprovalManager:
+    """Single-use, short-lived approval bound to one exact action fingerprint."""
+
+    def __init__(self, ttl_seconds: int = 90) -> None:
+        self.ttl_seconds = max(10, min(ttl_seconds, 300))
+        self._grants: dict[str, ApprovalGrant] = {}
+
+    def approve_from_ui(self, request: ActionRequest) -> str:
+        token = secrets.token_urlsafe(32)
+        self._grants[token] = ApprovalGrant(
+            token=token,
+            fingerprint=request.fingerprint(),
+            expires_at=time.monotonic() + self.ttl_seconds,
+        )
+        return token
+
+    def consume(self, request: ActionRequest, token: str | None) -> bool:
+        if not token:
+            return False
+        grant = self._grants.pop(token, None)
+        return bool(
+            grant
+            and grant.expires_at >= time.monotonic()
+            and secrets.compare_digest(grant.fingerprint, request.fingerprint())
+        )
+
+    def revoke_all(self) -> None:
+        self._grants.clear()

@@ -291,11 +291,18 @@ def test_chat_adds_selective_project_context_as_untrusted_local_data(tmp_path, m
         )
     )
 
+    assert captured["messages"][1]["role"] == "user"
     context_message = captured["messages"][1]["content"]
     assert "src/router.py" in context_message
     assert "unsaved_active_buffer" in context_message
-    assert "dado não confiável" in context_message
+    assert "workspace_files" in context_message
+    assert '"content_is_untrusted": true' in context_message
+    assert "UNTRUSTED WORKSPACE REFERENCE DATA" in context_message
     assert "private-token" not in context_message
+    assert all(
+        message["role"] != "system" or "src/router.py" not in message["content"]
+        for message in captured["messages"]
+    )
 
 
 def test_project_context_is_disabled_when_off_grid_is_disabled(tmp_path, monkeypatch):

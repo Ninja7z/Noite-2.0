@@ -93,6 +93,18 @@ from .config import get_settings
 from .hf_catalog import search_huggingface_models
 from .ide import ProjectDock
 from .logging_setup import setup_logging
+from .security import (
+    ActionRequest,
+    ApprovalManager,
+    AuditLogger,
+    Capability,
+    DecisionKind,
+    PermissionManager,
+    PolicyEngine,
+    RiskLevel,
+    ToolGuard,
+)
+from .security.settings_dialog import SecuritySettingsDialog
 from .terminal import is_destructive_command, run_terminal_command
 from .theme import DARK_THEME, LIGHT_THEME, UI_TOKENS, chat_document_styles
 
@@ -174,9 +186,7 @@ def install_auto_hide_scrollbars(root: QWidget) -> None:
         if not isinstance(area.verticalScrollBar(), AutoHideScrollBar):
             area.setVerticalScrollBar(AutoHideScrollBar(Qt.Orientation.Vertical, area))
         if not isinstance(area.horizontalScrollBar(), AutoHideScrollBar):
-            area.setHorizontalScrollBar(
-                AutoHideScrollBar(Qt.Orientation.Horizontal, area)
-            )
+            area.setHorizontalScrollBar(AutoHideScrollBar(Qt.Orientation.Horizontal, area))
 
 
 class WindowChrome(QFrame):
@@ -400,9 +410,7 @@ class NoiteWindow(QMainWindow):
         if available:
             ratio = UI_TOKENS["layout"]["window_initial_ratio"]
             width = min(available.width(), max(minimum_width, round(available.width() * ratio)))
-            height = min(
-                available.height(), max(minimum_height, round(available.height() * ratio))
-            )
+            height = min(available.height(), max(minimum_height, round(available.height() * ratio)))
         else:
             width, height = 1160, 720
         self.resize(width, height)
@@ -515,7 +523,6 @@ class NoiteWindow(QMainWindow):
             for index, chip in enumerate(self.quick_chips):
                 self.chips_grid.addWidget(chip, 0, index + 1)
         self._chips_compact = compact
-
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -646,21 +653,15 @@ class NoiteWindow(QMainWindow):
         self.new_conversation_button = QPushButton("Ver todas")
         self.new_conversation_button.setObjectName("sideButton")
         self.new_conversation_button.setMinimumHeight(36)
-        self.new_conversation_button.clicked.connect(
-            lambda: self.conversation_list.setFocus()
-        )
+        self.new_conversation_button.clicked.connect(lambda: self.conversation_list.setFocus())
         self.new_conversation_button.setAccessibleName("Ver todas as conversas")
         side_layout.addWidget(self.new_conversation_button)
         self.conversation_list = QListWidget()
         self.conversation_list.setObjectName("conversationList")
         self.conversation_list.setAccessibleName("Conversas salvas")
-        self.conversation_list.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
+        self.conversation_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.conversation_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.conversation_list.customContextMenuRequested.connect(
-            self._show_conversation_menu
-        )
+        self.conversation_list.customContextMenuRequested.connect(self._show_conversation_menu)
         self.conversation_list.currentItemChanged.connect(self._conversation_selected)
         side_layout.addWidget(self.conversation_list, 1)
         conversation_actions = QHBoxLayout()
@@ -708,7 +709,6 @@ class NoiteWindow(QMainWindow):
         user_row.addStretch(1)
         side_layout.addLayout(user_row)
         shell.addWidget(sidebar)
-
 
         main = QWidget()
         main.setObjectName("mainPane")
@@ -814,8 +814,12 @@ class NoiteWindow(QMainWindow):
                 "Preparar uma análise de código",
                 "code",
             ),
-            ("Criar plano", lambda: self._seed_input("Monte um plano em passos para: "),
-             "Preparar um pedido de plano", "plan"),
+            (
+                "Criar plano",
+                lambda: self._seed_input("Monte um plano em passos para: "),
+                "Preparar um pedido de plano",
+                "plan",
+            ),
             (
                 "Buscar na web",
                 lambda: self._seed_input("Pesquise na web sobre: "),
@@ -908,10 +912,13 @@ class NoiteWindow(QMainWindow):
         self.composer_head.setLayout(composer_head)
         self.composer_project_label = QLabel("Noite 2.0")
         self.composer_project_label.setObjectName("composerProject")
+        self.composer_project_label.setMinimumWidth(80)
         composer_head.addWidget(self.composer_project_label)
         composer_head.addStretch(1)
-        self.progress = QLabel("Pronta")
+        self.progress = QLabel()
         self.progress.setObjectName("progress")
+        self.progress.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.progress.setMinimumWidth(60)
         composer_head.addWidget(self.progress)
         composer_layout.addWidget(self.composer_head)
 
@@ -924,9 +931,7 @@ class NoiteWindow(QMainWindow):
         self.input.installEventFilter(self)
         self.input.files_dropped.connect(self._attach_files)
         self.input.setObjectName("input")
-        self.input.setPlaceholderText(
-            "Digite sua pergunta, peça uma tarefa ou escolha uma opção…"
-        )
+        self.input.setPlaceholderText("Digite sua pergunta, peça uma tarefa ou escolha uma opção…")
         self.input.setFixedHeight(74)
         self.input.send_requested.connect(self.send_message)
         self.send_button = QPushButton()
@@ -1106,9 +1111,7 @@ class NoiteWindow(QMainWindow):
         if sys.platform == "win32":
             enabled = ctypes.c_int()
             try:
-                if ctypes.windll.user32.SystemParametersInfoW(
-                    0x1042, 0, ctypes.byref(enabled), 0
-                ):
+                if ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(enabled), 0):
                     return bool(enabled.value)
             except (AttributeError, OSError):
                 pass
@@ -1119,9 +1122,7 @@ class NoiteWindow(QMainWindow):
 
     def _animate_width(self, widget: QWidget, opening: bool, width: int) -> None:
         animation_name = (
-            "_panel_width_animation"
-            if widget is self.context_panel
-            else "_sidebar_width_animation"
+            "_panel_width_animation" if widget is self.context_panel else "_sidebar_width_animation"
         )
         previous = getattr(self, animation_name, None)
         if previous is not None:
@@ -1162,12 +1163,14 @@ class NoiteWindow(QMainWindow):
 
     def _record_activity(self, event: object) -> None:
         state = getattr(event, "state", "")
-        self.progress.setText({
-            "started": "Pensando…",
-            "completed": "Resposta recebida",
-            "failed": "Falha na operação",
-            "cancelled": "Operação cancelada",
-        }.get(state, "Pronta"))
+        self.progress.setText(
+            {
+                "started": "Pensando…",
+                "completed": "Resposta recebida",
+                "failed": "Falha na operação",
+                "cancelled": "Operação cancelada",
+            }.get(state, "Pronta")
+        )
         if str(getattr(event, "operation", "")).startswith("Chamada ao modelo"):
             label = {
                 "started": "Em andamento",
@@ -1317,11 +1320,7 @@ class NoiteWindow(QMainWindow):
             self.conversation_list.setMaximumHeight(16777215)
             self.icon_rail.setFixedWidth(0)
             self.icon_rail.hide()
-            index = (
-                1
-                if position == "left"
-                else self.shell_layout.indexOf(self.content_area) + 1
-            )
+            index = 1 if position == "left" else self.shell_layout.indexOf(self.content_area) + 1
             self.shell_layout.insertWidget(index, self.sidebar)
             self.sidebar.setMinimumHeight(0)
 
@@ -1389,6 +1388,9 @@ class NoiteWindow(QMainWindow):
 
         tools_group = QGroupBox("Ferramentas e privacidade")
         tools_layout = QVBoxLayout(tools_group)
+        security_button = QPushButton("Segurança e permissões…")
+        security_button.clicked.connect(self._open_security_settings)
+        tools_layout.addWidget(security_button)
         tools_layout.addWidget(models_button)
         tools_layout.addWidget(hf_button)
         tools_layout.addWidget(tools_button)
@@ -1440,6 +1442,10 @@ class NoiteWindow(QMainWindow):
         self.preferences.setValue("model/ollama_endpoint", validated.ollama_base_url)
         self.model_box.setCurrentText(validated.local_model)
         self.context_panel.set_model(validated.local_model, "Configuração atualizada")
+
+    def _open_security_settings(self) -> None:
+        dialog = SecuritySettingsDialog(Path(self.settings.data_dir), self)
+        dialog.exec()
 
     def _open_project_search(self) -> None:
         self.project_dock.show()
@@ -1494,8 +1500,7 @@ class NoiteWindow(QMainWindow):
         self._pending_attachment_count = max(0, self._pending_attachment_count - 1)
         self._attachments.append(attachment)
         label = (
-            f"{attachment.path.name} · {attachment.media_type} · "
-            f"{attachment.size_bytes:,} bytes"
+            f"{attachment.path.name} · {attachment.media_type} · {attachment.size_bytes:,} bytes"
         )
         if attachment.truncated:
             label += " · texto limitado"
@@ -1639,8 +1644,10 @@ class NoiteWindow(QMainWindow):
         self.terminal_to_chat_button.setEnabled(True)
         exit_code = getattr(result, "exit_code", None)
         duration = getattr(result, "duration_ms", 0)
-        state = "cancelled" if getattr(result, "cancelled", False) else (
-            "failed" if exit_code else "completed"
+        state = (
+            "cancelled"
+            if getattr(result, "cancelled", False)
+            else ("failed" if exit_code else "completed")
         )
         message = (
             "Comando cancelado"
@@ -1696,9 +1703,7 @@ class NoiteWindow(QMainWindow):
         return QIcon(str(Path(__file__).resolve().parents[2] / "assets" / "icons" / f"{name}.svg"))
 
     @staticmethod
-    def _nav_button(
-        text: str, accessible_name: str, icon_name: str | None = None
-    ) -> QPushButton:
+    def _nav_button(text: str, accessible_name: str, icon_name: str | None = None) -> QPushButton:
         button = QPushButton(text)
         button.setObjectName("navButton")
         if icon_name:
@@ -1774,9 +1779,7 @@ class NoiteWindow(QMainWindow):
     def _append_message(self, role: str, content: str) -> None:
         self._messages.append((role, content))
         self._show_chat()
-        self.chat.append(
-            self._bubble_html(role, content, self.chat.viewport().width() - 32)
-        )
+        self.chat.append(self._bubble_html(role, content, self.chat.viewport().width() - 32))
         self._animate_chat_message()
         if getattr(self, "_follow_chat_tail", True):
             self._scroll_chat_to_tail()
@@ -1833,7 +1836,6 @@ class NoiteWindow(QMainWindow):
             return
         self._render_scheduled = True
         QTimer.singleShot(120, self._render_chat)
-
 
     def _refresh_conversation_list(self, select_id: str | None = None) -> None:
         conversations = self.client.sessoes()
@@ -2005,26 +2007,24 @@ class NoiteWindow(QMainWindow):
             if server == "up"
             else "Offline"
         )
-        self.status_label.setToolTip(
-            message or f"Ollama {server} · modelo {model}"
-        )
+        self.status_label.setToolTip(message or f"Ollama {server} · modelo {model}")
         self.context_panel.set_model(
             model, "Ollama conectado" if server == "up" else "Ollama desconectado"
         )
         show_banner = server != "up"
         self.ollama_banner.setVisible(show_banner)
-        self.ollama_banner_text.setText(
-            message if message else "Ollama indisponível."
-        )
+        self.ollama_banner_text.setText(message if message else "Ollama indisponível.")
         self.ollama_start_button.setVisible(show_banner and self.client.ollama_available())
         self.ollama_start_button.setEnabled(True)
         installed = data.get("installed_models")
         if server == "up" and isinstance(installed, list):
             self._refresh_model_options(installed)
             details = data.get("model_details")
-            self._installed_model_details = [
-                item for item in details if isinstance(item, dict)
-            ] if isinstance(details, list) else []
+            self._installed_model_details = (
+                [item for item in details if isinstance(item, dict)]
+                if isinstance(details, list)
+                else []
+            )
 
     def _refresh_model_options(self, installed: list) -> None:
         names = [str(name).strip() for name in installed if str(name).strip()]
@@ -2088,7 +2088,8 @@ class NoiteWindow(QMainWindow):
                     else "tamanho indisponível"
                 )
                 metadata = " · ".join(
-                    str(item.get(key)) for key in ("family", "parameter_size", "quantization")
+                    str(item.get(key))
+                    for key in ("family", "parameter_size", "quantization")
                     if item.get(key)
                 )
                 models.addItem(f"{name} · {size_text}" + (f" · {metadata}" if metadata else ""))
@@ -2106,9 +2107,7 @@ class NoiteWindow(QMainWindow):
             data = value if isinstance(value, dict) else {}
             details = data.get("model_details", [])
             if isinstance(details, list):
-                self._installed_model_details = [
-                    item for item in details if isinstance(item, dict)
-                ]
+                self._installed_model_details = [item for item in details if isinstance(item, dict)]
             fill(
                 self._installed_model_details,
                 str(data.get("message") or "Estado Ollama atualizado."),
@@ -2614,7 +2613,6 @@ class NoiteWindow(QMainWindow):
         )
         self.progress.setText("Pronta")
 
-
     def _on_error(self, message: str) -> None:
         self._flush_stream_chunks()
         self._finish_thinking()
@@ -2896,9 +2894,7 @@ class MCPDialog(QDialog):
         self.worker = TaskThread(lambda: MCPClient().discover_tools(server), self)
         self.worker.completed.connect(self._show_tools)
         self.worker.failed.connect(self._show_mcp_failure)
-        self.worker.failed.connect(
-            lambda _message: self._emit_mcp_discovery_failure()
-        )
+        self.worker.failed.connect(lambda _message: self._emit_mcp_discovery_failure())
         self.worker.cancelled.connect(self._emit_mcp_discovery_cancelled)
         self.worker.finished.connect(self._task_finished)
         self.worker.start()
@@ -2919,9 +2915,7 @@ class MCPDialog(QDialog):
                     "Descoberta de ferramentas MCP",
                     "completed",
                     f"Ferramentas disponíveis · {len(items)}",
-                    duration_ms=max(
-                        0, round((perf_counter() - self._discovery_started_at) * 1000)
-                    ),
+                    duration_ms=max(0, round((perf_counter() - self._discovery_started_at) * 1000)),
                     details=f"Servidor: {self._discovery_server}",
                 )
             )
@@ -3041,6 +3035,26 @@ class MCPDialog(QDialog):
         if not self._server_is_approved(name, config):
             self._warn_configuration_changed()
             return
+        security_dir = self.data_dir / "security"
+        permission_manager = PermissionManager(security_dir / "permissions.json")
+        approval_manager = ApprovalManager()
+        audit_logger = AuditLogger(security_dir / "audit.sqlite3")
+        policy = PolicyEngine(permission_manager)
+        action_request = ActionRequest(
+            actor="user",
+            tool="mcp",
+            capability=Capability.MCP,
+            operation="call_tool",
+            resource=f"{name}/{tool['name']}",
+            arguments=arguments,
+            risk=RiskLevel.R2,
+        )
+        policy_decision = policy.evaluate(action_request)
+        if policy_decision.decision == DecisionKind.DENY:
+            audit_logger.record(action_request, policy_decision)
+            QMessageBox.warning(self, "Permissão negada", policy_decision.reason)
+            return
+        audit_logger.record(action_request, policy_decision)
         command = str(config["command"])
         args = config.get("args", [])
         env_vars = config.get("env_vars", [])
@@ -3064,6 +3078,7 @@ class MCPDialog(QDialog):
         if not self._server_is_approved(name, config):
             self._warn_configuration_changed()
             return
+        approval_token = approval_manager.approve_from_ui(action_request)
         from .mcp_client import MCPClient, MCPServer
 
         server = MCPServer(
@@ -3087,11 +3102,15 @@ class MCPDialog(QDialog):
             )
         )
         self.worker = TaskThread(
-            lambda: MCPClient().call_tool(
-                server,
-                str(tool["name"]),
-                arguments,
-                input_schema=tool.get("input_schema"),
+            lambda: ToolGuard(policy, approval_manager, audit_logger).execute(
+                action_request,
+                lambda **tool_arguments: MCPClient().call_tool(
+                    server,
+                    str(tool["name"]),
+                    tool_arguments,
+                    input_schema=tool.get("input_schema"),
+                ),
+                approval_token=approval_token,
             ),
             self,
         )

@@ -123,3 +123,219 @@ def route_model(text: str, settings: Settings, *, api_key: str | None = None) ->
     if not (configured_key or "").strip():
         return ModelRoute("local", category, "chave Z.ai ausente")
     return ModelRoute("glm", category, "tarefa auxiliar autorizada")
+
+
+_HARDWARE_PROFILE = {
+    "cpu_cores": 4,
+    "system_ram_gb": 16,
+    "vram_gb": 6,
+    "gpu": "gtx_1660s",
+}
+
+
+def suggest_models_for_hardware(settings) -> list[dict[str, str]]:
+    """Retorna modelos recomendados para o hardware atual baseado em RAM/VRAM."""
+    recommendations = []
+    recommendations.append(
+        {
+            "model": "gemma:2b",
+            "provider": "ollama",
+            "reason": "2B Q4_K_M -- cabem nos 6GB VRAM da GTX 1660S; rpidos em CPU+GPU misturada.",
+        }
+    )
+    recommendations.append(
+        {
+            "model": "gemma:3b",
+            "provider": "ollama",
+            "reason": "3B Q4_K_M -- cabem nos 6GB VRAM, mas podem ser lentos em CPU sem AVX2",
+            "reason2": "; use se precisar de mais capacidade.",
+        }
+    )
+    recommendations.append(
+        {
+            "model": "phi3:3.8b",
+            "provider": "ollama",
+            "reason": "3.8B Q4_K_M -- bom equilbrio velocidade/qualidade; cabem nos 6GB VRAM.",
+        }
+    )
+    recommendations.append(
+        {
+            "model": "llama3.2:3b",
+            "provider": "ollama",
+            "reason": "3B Q4_K_M -- similar ao phi3; pode ser ligeiramente mais lento",
+        }
+    )
+    recommendations.append(
+        {
+            "model": "mistral:7b",
+            "provider": "ollama",
+            "reason": "7B Q4_K_M -- cabe na RAM de 16GB; desempenho depende da divisão CPU/GPU",
+            "reason2": ". Use apenas se necessário.",
+        }
+    )
+    user_model = settings.local_model.strip()
+    if user_model:
+        lowered = user_model.casefold()
+        for rec in recommendations:
+            if rec["model"].casefold().startswith(lowered):
+                recs = [r for r in recommendations if r["model"] != rec["model"]]
+                recs.insert(0, rec)
+                recommendations = recs
+                break
+    return recommendations
+
+
+def is_model_compatible(model_id: str, vram_gb: int, ram_gb: int) -> bool | None:
+    """Estima compatibilidade de modelos quantizados com VRAM e RAM disponíveis.
+
+    A estimativa assume quantização próxima de Q4 e não substitui a medição
+    do uso real, que também depende da janela de contexto e do offload.
+
+    Returns:
+        True se o modelo caber na VRAM e RAM especificados (estimativa).
+        False se exceder a memória disponível (estimativa).
+        None se não for possível determinar o tamanho do modelo.
+
+    Critical Notes (must-read):
+        1. "Caber na memória" NÃO equivale a desempenho suave.
+           - Peso dos parâmetros ≠ VRAM ocupada real (buffers, KV cache, overhead aumentam 15-30%)
+           - Ex: 7B Q4_K_M ~4.7GB de pesos, mas podem consumir 5.4-5.9GB VRAM real
+        2. Ausência de AVX2 (i7-3770) NÃO limita offload para GPU.
+           - llama.cpp pode descarregar camadas para GTX 1660 Super normalmente
+           - O gargalo é processamento CPU quando camadas não cabem na VRAM
+           - Transferências excessivas RAM↔VRAM degradam performance
+        3. Contexto maior aumenta uso de KV cache, pressionando VRAM além do esperado
+
+    Model Classification (for hardware planning):
+        - 🟢 Confortável: modelo com margem de memória >= 20% livre após carregado
+        - 🟡 Limitado: modelo que cabe, mas com margem < 20% ou requiere offload significativo
+        - 🔴 Inviável: modelo excede VRAM/RAM disponíveis ou performance impraticável
+    """
+    size_map = {
+        0.5: 0.3,
+        1.5: 1.2,
+        2.0: 1.8,
+        2.5: 2.0,
+        3.0: 2.3,
+        3.8: 2.6,
+        4.0: 2.8,
+        5.0: 3.5,
+        6.0: 4.0,
+        7.0: 4.7,  # Atualizado: 7B Q4_K_M ~4.7GB (mais preciso)
+        8.0: 5.2,
+        9.0: 5.8,
+        10.0: 6.5,
+        13.0: 8.5,
+        14.0: 9.0,
+        20.0: 12.5,
+        30.0: 18.0,
+    }
+    model = model_id.casefold()
+    # Tenta extrair tamanho de parâmetros do nome do modelo
+    # Padrão: busca "7b", "3.8b", "2.5b" etc, evitando pegar "2.5" de "qwen2.5"
+    match = re.search(r"(?<![a-z0-9])(\d+(?:\.\d+)?)(?=b)(?![a-z0-9])", model)
+    if match is None:
+        # Fallback: busca após dois pontos (ex: "mistral:7b")
+        match = re.search(r":(\d+(?:\.\d+)?)\b", model)
+    if match is None:
+        # Não conseguiu determinar tamanho - retorna None em vez de True
+        # para forçar avaliação explícita
+        return None
+    parameter_count = float(match.group(1))
+    estimated_vram = size_map.get(parameter_count, parameter_count * 0.65)
+    # Ajuste realista: pesos + ~25% de overhead (buffers, KV cache inicial, metadados)
+    real_vram_ratio = 1.25  # Fator de overhead conservador
+    estimated_vram_real = estimated_vram * real_vram_ratio
+    estimated_ram = max(2.0, estimated_vram_real * 1.3)
+    fits_vram = estimated_vram_real <= vram_gb
+    fits_ram = estimated_ram <= ram_gb
+
+    # Classificação em categorias (confortável/limitado/inviável)
+    if fits_vram and fits_ram:
+        free_vram_pct = ((vram_gb - estimated_vram_real) / vram_gb) * 100
+        if free_vram_pct >= 20:
+            category = "confortavel"
+        else:
+            category = "limitado"
+    elif fits_vram or fits_ram:
+        # Cabe em um dos recursos, mas não nos dois com margem
+        category = "limitado"
+    else:
+        category = "inviavel"
+
+    # Retorna bool | None para compatibilidade verso abaixo
+    # O código antigo que faz `if is_model_compatible(...)` funciona corretamente
+    return fits_vram and fits_ram
+
+
+def get_model_category(model_id: str, vram_gb: int, ram_gb: int) -> tuple[bool, str]:
+    """Classifica o nível de compatibilidade em categorias detalhadas.
+
+    Returns:
+        Tuple de (bool_compatível, categoria_str):
+        - bool: True se caber na VRAM e RAM (mesmo algoritmo de is_model_compatible)
+        - str: Categoria - "confortavel", "limitado" ou "inviavel"
+
+    Categories:
+        - 🟢 Confortável: margem de memória >= 20% livre após carregado
+        - 🟡 Limitado: modelo que cabe, mas com margem < 20% ou offload significativo necessário
+        - 🔴 Inviável: modelo excede VRAM/RAM disponíveis ou performance impraticável
+    """
+    size_map = {
+        0.5: 0.3,
+        1.5: 1.2,
+        2.0: 1.8,
+        2.5: 2.0,
+        3.0: 2.3,
+        3.8: 2.6,
+        4.0: 2.8,
+        5.0: 3.5,
+        6.0: 4.0,
+        7.0: 4.7,  # Atualizado: 7B Q4_K_M ~4.7GB (mais preciso)
+        8.0: 5.2,
+        9.0: 5.8,
+        10.0: 6.5,
+        13.0: 8.5,
+        14.0: 9.0,
+        20.0: 12.5,
+        30.0: 18.0,
+    }
+    model = model_id.casefold()
+    # Tenta extrair tamanho de parâmetros do nome do modelo
+    # Padrão: busca "7b", "3.8b", "2.5b" etc, evitando pegar "2.5" de "qwen2.5"
+    match = re.search(r"(?<![a-z0-9])(\d+(?:\.\d+)?)(?=b)(?![a-z0-9])", model)
+    if match is None:
+        # Fallback: busca após dois pontos (ex: "mistral:7b")
+        match = re.search(r":(\d+(?:\.\d+)?)\b", model)
+    if match is None:
+        # Não conseguiu determinar tamanho - retorna (None, "indeterminado")
+        return (None, "indeterminado")
+    parameter_count = float(match.group(1))
+    estimated_vram = size_map.get(parameter_count, parameter_count * 0.65)
+    # Ajuste realista: pesos + ~25% de overhead (buffers, KV cache inicial, metadados)
+    real_vram_ratio = 1.25  # Fator de overhead conservador
+    estimated_vram_real = estimated_vram * real_vram_ratio
+    estimated_ram = max(2.0, estimated_vram_real * 1.3)
+    fits_vram = estimated_vram_real <= vram_gb
+    fits_ram = estimated_ram <= ram_gb
+
+    # Classificação em categorias (confortável/limitado/inviável)
+    if fits_vram and fits_ram:
+        free_vram_pct = ((vram_gb - estimated_vram_real) / vram_gb) * 100
+        if free_vram_pct >= 20:
+            category = "confortavel"
+        else:
+            category = "limitado"
+    elif fits_vram or fits_ram:
+        # Cabe em um dos recursos, mas não nos dois com margem
+        category = "limitado"
+    else:
+        category = "inviavel"
+
+    # Retorna tupla: (bool_compatível, categoria_str)
+    # O bool aqui é o mesmo que is_model_compatible retornaria
+    return (fits_vram and fits_ram, category)
+
+
+def get_hardware_profile() -> dict:
+    return dict(_HARDWARE_PROFILE)

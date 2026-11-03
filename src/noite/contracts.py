@@ -7,6 +7,8 @@ class IntentKind(StrEnum):
     CHAT = "chat"
     OPEN_APPLICATION = "open_application"
     SEARCH_FILE = "search_file"
+    SHOW_MASCOT = "show_mascot"
+    HIDE_MASCOT = "hide_mascot"
 
 
 class Intent(BaseModel):

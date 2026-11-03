@@ -3,6 +3,19 @@ import re
 from .contracts import Intent, IntentKind
 from .normalization import normalize_transcription
 
+_SHOW_MASCOT = re.compile(
+    r"(?:(?:abrir|abra|abre|mostrar|mostra|exibir|exiba|chamar|chama)\s+"
+    r"(?:(?:o|a)\s+)?(?:mascote|noite(?:\s+2\.0)?)"
+    r"|(?:open|show|display|launch|call)\s+(?:(?:the|my)\s+)?(?:mascot|noite)"
+    r"|bring\s+(?:(?:the|my)\s+)?(?:mascot|noite)\s+up)"
+    r"(?:\s+(?:on\s+screen|na\s+tela))?",
+    re.IGNORECASE,
+)
+_HIDE_MASCOT = re.compile(
+    r"(?:esconder|esconda|esconde|ocultar|oculte|oculta|sumir|some)\s+"
+    r"(?:(?:o|a)\s+)?(?:mascote|noite(?:\s+2\.0)?)",
+    re.IGNORECASE,
+)
 _OPEN_APP = re.compile(r"(?:abrir|abra|abre)\s+(?P<app>.+)", re.IGNORECASE)
 _SEARCH_FILE = re.compile(
     r"(?:pesquisar|pesquise|procurar|procure|buscar|busque)\s+"
@@ -16,6 +29,22 @@ def route(text: str) -> Intent:
     normalized = normalize_transcription(text)
     if not normalized:
         raise ValueError("O texto de entrada não pode estar vazio.")
+
+    if _HIDE_MASCOT.fullmatch(normalized):
+        return Intent(
+            kind=IntentKind.HIDE_MASCOT,
+            original_text=original,
+            normalized_text=normalized,
+            parameters={"action": "hide", "endpoint": "/v1/mascot/hide"},
+        )
+
+    if _SHOW_MASCOT.fullmatch(normalized):
+        return Intent(
+            kind=IntentKind.SHOW_MASCOT,
+            original_text=original,
+            normalized_text=normalized,
+            parameters={"action": "show", "endpoint": "/v1/mascot/show"},
+        )
 
     if match := _OPEN_APP.fullmatch(normalized):
         return Intent(

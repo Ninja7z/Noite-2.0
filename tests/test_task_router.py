@@ -1,7 +1,7 @@
 import pytest
 
 from noite.config import Settings
-from noite.task_router import TaskCategory, classify_task, route_model
+from noite.task_router import TaskCategory, classify_task, is_model_compatible, route_model
 
 
 def test_classify_supported_auxiliary_tasks_deterministically():
@@ -140,3 +140,9 @@ def test_incidental_json_mention_is_not_an_auxiliary_task():
 def test_offline_mode_blocks_glm_even_when_enabled():
     settings = Settings(_env_file=None, off_grid=True, glm_enabled=True)
     assert route_model("Resuma este texto", settings, api_key="configured").provider == "local"
+
+
+def test_model_compatibility_reads_parameter_count_after_tag_not_model_family():
+    assert is_model_compatible("qwen2.5-coder:7b-instruct-q4_K_M", 6, 16)
+    assert not is_model_compatible("qwen2.5-coder:13b-instruct-q4_K_M", 6, 16)
+    assert is_model_compatible("llama3.2:3b", 6, 16)
