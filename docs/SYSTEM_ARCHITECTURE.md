@@ -59,7 +59,7 @@ de inteligência nunca importa um executor diretamente.
 | I1 | Núcleo (`assistant`, `store`, `workspace`, `security`) não importa Qt | `grep -rn PySide6` nesses módulos deve retornar vazio |
 | I2 | UI não importa `model_gateway`; conversa via `AssistantService` | `grep -rn model_gateway src/noite/mascot.py` vazio |
 | I3 | Chamada de rede/modelo fora da thread visual; UI atualiza por sinal Qt | `QThread` em `mascot.py`/`ui.py`; testes de ciclo de vida |
-| I4 | Nenhuma ferramenta executa sem `ToolGuard` | **alvo**; hoje só MCP cumpre (dívida D1) |
+| I4 | Nenhuma ferramenta executa sem `ToolGuard` | parcial: terminal + MCP (PR 002); arquivos do editor pendentes (D1) |
 | I5 | Permissão padrão é Sem acesso; política só muda pela interface de configurações | `tests/test_security_core.py` |
 | I6 | Conteúdo externo é dado, não instrução; contexto entra rotulado como não confiável | `assistant.respond` (JSON rotulado) + `_redact_secret_values` no limite do modelo |
 | I7 | Identidade não depende do provedor ativo | teste de identidade em `tests/test_assistant.py` |
@@ -88,7 +88,7 @@ confiável** na mensagem.
 
 | # | Dívida | Evidência |
 |---|---|---|
-| D1 | `ToolGuard` cobre **1 ponto** de execução (MCP). Terminal e arquivos são chamados direto pela UI legada | `ui.py:3107` é a única instanciação; `ui.py:1624` chama terminal direto |
+| D1 | Terminal e MCP já passam pelo `GuardedTools`; **arquivos do editor** ainda são chamados direto | `tests/test_execution_boundary.py` (allowlist com exceção em `ide.py`) |
 | D2 | Dois validadores de caminho divergentes (`workspace.resolve_workspace_path` sem rejeição de link; `security.path_guard` sem uso no app) | `workspace.py:88`, `security/path_guard.py:6` |
 | D3 | Modelo de permissão paralelo (`orchestrator.PermissionLevel`/`check_permission`) fora do `noite.security` | `orchestrator.py:374-386` |
 | D4 | IDE completa existe apenas no legado; o mascote não hospeda projeto/editor | `ide.py` importado só por `ui.py` |

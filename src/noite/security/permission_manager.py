@@ -36,6 +36,14 @@ class PermissionManager:
             self.profile = PermissionProfile.NONE
             self.enabled = set()
 
+    def reload(self) -> None:
+        """Re-read the policy from disk.
+
+        Revocation made in the settings UI must beat a stale in-memory snapshot,
+        so every decision path refreshes before evaluating and before dispatch.
+        """
+        self._load()
+
     def is_enabled(self, capability: Capability) -> bool:
         if self.profile == PermissionProfile.NONE:
             return False
