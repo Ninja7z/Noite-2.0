@@ -113,6 +113,7 @@ O executável lançador recebe a lua roxa e pode ser construído sem sobrescreve
 - Claude: engenharia e revisão de código.
 - Codex: programação e implementação.
 - Gemini: pesquisa e análise.
+- Nemontron: coder e analisador 
 - Criador do projeto: proprietário e diretor.
 
 ## Segurança
