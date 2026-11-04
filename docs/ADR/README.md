@@ -38,6 +38,7 @@ Evidência que justificaria reabrir a decisão.
 | [003](003-tool-authorization.md) | Autorização fora do modelo: `ToolGuard` único caminho de execução | aceito |
 | [004](004-memory-storage.md) | SQLite + FTS5 primeiro; vetores condicionados a evidência | aceito |
 | [005](005-model-provider.md) | Provedor atrás de um adaptador; LiteLLM não é obrigatório | aceito |
+| [006](006-ide-no-mascote.md) | A IDE entra no mascote como painel com abas, em fatias | aceito |
 
 ## Regras
 
