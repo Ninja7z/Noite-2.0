@@ -83,8 +83,8 @@ O que **não** está completo é a cobertura: o `ToolGuard` é instanciado em
 
 | Ponto | Executa | Passa por `ToolGuard`? | Origem |
 |---|---|---|---|
-| Chamada MCP | processo MCP stdio | **sim** | `ui.py:3107` |
-| Terminal | PowerShell com Job Object | não | `ui.py:1624` → `terminal.run_terminal_command` |
+| Chamada MCP | processo MCP stdio | **sim** | `GuardedTools.execute` (PR 002) |
+| Terminal | PowerShell com Job Object | **sim** (PR 002) | `GuardedTools.run_terminal` |
 | Escrita de arquivo | `workspace.save_workspace_text` (atômico) | não | `ide.py:777` |
 | Criação de arquivo/pasta | `workspace.create_workspace_*` | não | `ide.py:594`, `ide.py:619` |
 | Busca no projeto | leitura de arquivos | não | `ide.py:216`, `assistant` (`tools.py`) |
@@ -99,10 +99,13 @@ as consultam.
 
 ### Consequência prática
 
-Um usuário pode negar a capacidade Terminal nas configurações e, ainda assim, a
-UI legada executará o comando pelo painel de terminal, porque aquele caminho não
-autoriza. Isso é uma **lacuna de cobertura**, não um bypass do `ToolGuard`: a
-regra é violada pela ausência da chamada, não por falha na implementação.
+Terminal e MCP já obedecem à política: sem `terminal.execute` ou `mcp.call`
+concedidos, a chamada é negada, auditada e visível na interface (PR 002). O que
+ainda falta é a **escrita/criação de arquivos do editor legado** (`ide.py`), que
+continua chamando o executor direto — é uma exceção declarada e vigiada pelo
+teste `tests/test_execution_boundary.py`, que falha se aparecer um novo ponto de
+execução. Essa exceção fecha junto com a migração do editor para o painel do
+mascote (ADR-006, fatia 2 / PR 006).
 
 ### Caminho único de execução (alvo da Fase 1)
 

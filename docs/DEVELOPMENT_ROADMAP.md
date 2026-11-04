@@ -18,8 +18,9 @@ gates passam; testes unitários sozinhos não bastam.
 | **7** | **Voz, visão e multimodalidade** | benchmark no hardware alvo com latência e consumo documentados |
 | **8** | **Distribuição e homologação** — instalador, atualização, recuperação, regressão | instalação limpa em Windows funciona sem ambiente de desenvolvimento |
 
-Estado atual: **Fase 0** (este PR). **Fase 1 é bloqueante** para qualquer
-ferramenta nova.
+Estado atual: **Fase 0** publicada (PR 001 + ADR-006) e **Fase 1 em andamento**
+(PR 002 concluído: terminal + MCP no caminho único; PR 003 e 004 pendentes).
+Fase 1 continua bloqueante para qualquer ferramenta nova.
 
 ## Mapa das dívidas → fases
 
