@@ -2,6 +2,20 @@
 
 Assistente desktop local-first em português. O MVP inclui chat PySide6, respostas rápidas, gateway Ollama e histórico SQLite.
 
+## Documentação oficial
+
+A fonte normativa do produto fica em [`docs/README.md`](docs/README.md):
+
+- [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) — o que a Noite é, pilares (identidade/inteligência/autonomia) e decisões fixadas.
+- [`docs/SYSTEM_ARCHITECTURE.md`](docs/SYSTEM_ARCHITECTURE.md) — camadas, módulos, invariantes e dívidas estruturais declaradas.
+- [`docs/SECURITY_ARCHITECTURE.md`](docs/SECURITY_ARCHITECTURE.md) — autorização, cobertura real do `ToolGuard` e reversibilidade.
+- [`docs/MEMORY_ARCHITECTURE.md`](docs/MEMORY_ARCHITECTURE.md), [`docs/MODEL_ROUTING.md`](docs/MODEL_ROUTING.md), [`docs/UI_ARCHITECTURE.md`](docs/UI_ARCHITECTURE.md).
+- [`docs/DEVELOPMENT_ROADMAP.md`](docs/DEVELOPMENT_ROADMAP.md) — ordem de fases, gates e sequência de PRs.
+- [`docs/ADR/`](docs/ADR/) — decisões arquiteturais com motivo e consequências.
+
+`docs/MASTER_PLAN.md`, `docs/roadmap.md` e `docs/CONTINUATION_STATE.md` são
+**históricos**: registram estado de uma data e não definem o plano atual.
+
 ## Escopo inicial
 
 - Núcleo assíncrono em Python, com contratos validados por Pydantic.

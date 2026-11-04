@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import StrEnum
-from pathlib import Path
 from typing import Literal
 
 from .activity import ActivityEvent, ActivityState, make_activity_event
@@ -142,8 +139,8 @@ class Orchestrator:
             hardware["vram_gb"],
             hardware["system_ram_gb"],
         )
-        if not model_compatible:
-            summary = f"Modelo {self.settings.local_model} over hardware limit"
+        if model_compatible is False:
+            summary = f"Modelo {self.settings.local_model} acima do limite do hardware"
             self._emit_activity(
                 "modelo",
                 "warning",
@@ -368,103 +365,3 @@ class Orchestrator:
             f"{len(plan.agents)} subagentes concluídos",
         )
         return consolidated
-
-
-# --- Funções de máquina e permissões ---
-
-
-class PermissionLevel(StrEnum):
-    FULL = "full"
-    REGULAR = "regular"
-    NONE = "none"
-
-
-def check_permission(
-    requested: PermissionLevel, current: PermissionLevel = PermissionLevel.NONE
-) -> bool:
-    """Verifica se uma permissão é atendida baseado no nível atual."""
-    order = [PermissionLevel.NONE, PermissionLevel.REGULAR, PermissionLevel.FULL]
-    return order.index(current) >= order.index(requested)
-
-
-def request_permission(minimum: PermissionLevel) -> PermissionLevel:
-    """Solicita permissão ao usuário (a ser implementado na UI)."""
-    # Placeholder - na implementação real, isso retornaria o nível de permissão
-    # concedido pelo usuário através da interface.
-    return PermissionLevel.NONE
-
-
-def is_safe_path(base: Path, target: Path) -> bool:
-    """Verifica se o target está dentro do base (proteção contra path traversal)."""
-    try:
-        target_resolved = target.resolve()
-        base_resolved = base.resolve()
-        return target_resolved.is_relative_to(base_resolved)
-    except (ValueError, TypeError):
-        return False
-
-
-def list_files_safe(
-    path: Path, allowed_extensions: list[str] | None = None
-) -> list[dict[str, str]]:
-    """Lista arquivos de forma segura, com extensões opcionais permitidas."""
-    result = []
-    if not path.is_dir():
-        return result
-    for item in sorted(path.iterdir()):
-        if item.is_file():
-            ext = item.suffix.lower()
-            if allowed_extensions is None or ext in allowed_extensions:
-                result.append(
-                    {
-                        "name": item.name,
-                        "path": str(item.relative_to(path.parent)),
-                        "size": str(item.stat().st_size),
-                        "modified": datetime.fromtimestamp(item.stat().st_mtime).isoformat(),
-                    }
-                )
-        elif item.is_dir() and not item.name.startswith("."):
-            # Listar diretórios recursivamente com profundidade limitada
-            for sub in list_files_safe(item, allowed_extensions):
-                sub["path"] = str(item.name) + "/" + sub["path"]
-                result.append(sub)
-    return result
-
-
-def read_file_safe(path: Path, max_size: int = 1_000_000) -> str | None:
-    """Lê um arquivo de forma segura, com limite de tamanho."""
-    try:
-        size = path.stat().st_size
-        if size > max_size:
-            logger.warning("Arquivo muito grande: %s (%d bytes)", path, size)
-            return None
-        if not path.is_file():
-            return None
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            return f.read()
-    except (OSError, UnicodeDecodeError) as exc:
-        logger.error("Erro ao ler %s: %s", path, exc)
-        return None
-
-
-def write_file_safe(path: Path, content: str, backup: bool = True) -> bool:
-    """Escreve em um arquivo de forma segura, com backup opcional."""
-    try:
-        path_resolved = path.resolve()
-        # Verificar se o caminho é seguro (dentro do workspace/data_dir)
-        if not path_resolved.parent.is_relative_to(Path.cwd().resolve()):
-            logger.warning("Tentativa de escrita fora do diretório permitido: %s", path)
-            return False
-        if backup:
-            # Criar backup antes de escrever
-            backup_path = path_resolved.with_suffix(".bak")
-            try:
-                shutil.copy2(path_resolved, backup_path)
-            except OSError:
-                pass  # Backup opcional, falha pode ser ignorado
-        with open(path_resolved, "w", encoding="utf-8") as f:
-            f.write(content)
-        return True
-    except OSError as exc:
-        logger.error("Erro ao escrever %s: %s", path, exc)
-        return False

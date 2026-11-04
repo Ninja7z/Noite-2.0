@@ -23,12 +23,20 @@ class ApprovalManager:
 
     def approve_from_ui(self, request: ActionRequest) -> str:
         token = secrets.token_urlsafe(32)
+        now = time.monotonic()
+        self._prune(now)
         self._grants[token] = ApprovalGrant(
             token=token,
             fingerprint=request.fingerprint(),
-            expires_at=time.monotonic() + self.ttl_seconds,
+            expires_at=now + self.ttl_seconds,
         )
         return token
+
+    def _prune(self, now: float) -> None:
+        """Drop expired grants so unused approvals cannot accumulate."""
+        expired = [token for token, grant in self._grants.items() if grant.expires_at < now]
+        for token in expired:
+            self._grants.pop(token, None)
 
     def consume(self, request: ActionRequest, token: str | None) -> bool:
         if not token:
