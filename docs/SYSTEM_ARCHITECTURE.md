@@ -89,12 +89,13 @@ confiável** na mensagem.
 | # | Dívida | Evidência |
 |---|---|---|
 | D1 | Terminal e MCP já passam pelo `GuardedTools`; **arquivos do editor** ainda são chamados direto | `tests/test_execution_boundary.py` (allowlist com exceção em `ide.py`) |
-| D2 | Dois validadores de caminho divergentes (`workspace.resolve_workspace_path` sem rejeição de link; `security.path_guard` sem uso no app) | `workspace.py:88`, `security/path_guard.py:6` |
-| D3 | Modelo de permissão paralelo (`orchestrator.PermissionLevel`/`check_permission`) fora do `noite.security` | `orchestrator.py:374-386` |
+| D2 | ~~Dois validadores de caminho divergentes~~ **fechada (PR 003)**: ambos rejeitam symlink/junction por componente | `workspace.resolve_workspace_path`, `security/path_guard.py` |
+| D3 | ~~Permissão paralela no orquestrador~~ **fechada (PR 003)**: ordem de perfis vive só em `noite.security` (`PROFILE_ORDER`/`profile_allows`) | `security/permission_manager.py` |
 | D4 | IDE completa existe apenas no legado; o mascote não hospeda projeto/editor | `ide.py` importado só por `ui.py` |
-| D5 | Auditoria atualiza resultado por subquery (ambígua em retry) | `security/audit_logger.py:85-95` |
+| D5 | ~~Auditoria por subquery~~ **fechada (PR 003)**: `record()` devolve o id e o resultado é gravado por `id` | `security/audit_logger.py`, `security/tool_guard.py` |
 | D6 | Terminal é Windows-only, mas o CI roda Ubuntu | `terminal.py:1`; 4 testes skipados |
 | D7 | `_redact_secret_values` é privado, mas importado por 3 módulos | `assistant.py:33`, `model_gateway.py:15`, `task_router.py:8` |
 
-Essas dívidas estão mapeadas na Fase 1 do `DEVELOPMENT_ROADMAP.md`. Nenhuma
-ferramenta nova deve ser construída antes de D1–D3 serem resolvidas.
+Essas dívidas estão mapeadas na Fase 1 do `DEVELOPMENT_ROADMAP.md`. D2, D3 e D5
+já foram fechadas (PR 003); nenhuma ferramenta nova deve entrar antes de a parte
+restante de D1 (arquivos do editor, D7) ser resolvida.

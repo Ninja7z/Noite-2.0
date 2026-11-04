@@ -10,7 +10,12 @@ from .models import (
     RiskLevel,
 )
 from .path_guard import resolve_allowed_path
-from .permission_manager import RESTRICTED_CAPABILITIES, PermissionManager
+from .permission_manager import (
+    PROFILE_ORDER,
+    RESTRICTED_CAPABILITIES,
+    PermissionManager,
+    profile_allows,
+)
 from .policy_engine import PolicyEngine
 from .tool_guard import ToolDenied, ToolGuard
 
@@ -22,6 +27,7 @@ __all__ = [
     "DecisionKind",
     "GuardedTools",
     "PermissionProfile",
+    "PROFILE_ORDER",
     "PermissionManager",
     "PolicyDecision",
     "PolicyEngine",
@@ -29,5 +35,6 @@ __all__ = [
     "RiskLevel",
     "ToolDenied",
     "ToolGuard",
+    "profile_allows",
     "resolve_allowed_path",
 ]

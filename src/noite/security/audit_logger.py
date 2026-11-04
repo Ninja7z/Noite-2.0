@@ -51,9 +51,10 @@ class AuditLogger:
         connection.execute("PRAGMA busy_timeout=5000")
         return connection
 
-    def record(self, request: ActionRequest, decision: PolicyDecision) -> None:
+    def record(self, request: ActionRequest, decision: PolicyDecision) -> int:
+        """Persist one decision and return the audit row id for status updates."""
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 INSERT INTO security_audit (
                     request_id, created_at, actor, tool, capability, operation,
@@ -74,12 +75,30 @@ class AuditLogger:
                     decision.fingerprint,
                 ),
             )
+            return int(cursor.lastrowid or 0)
 
     def record_execution_result(
-        self, request: ActionRequest, *, succeeded: bool, error_type: str = ""
+        self,
+        request: ActionRequest,
+        *,
+        succeeded: bool,
+        error_type: str = "",
+        audit_id: int | None = None,
     ) -> None:
+        """Update the execution status of one attempt.
+
+        `audit_id` comes from `record()`. Without it we fall back to the newest
+        allowed row for the request, which is ambiguous when the same request is
+        retried; callers in the guard always pass the id.
+        """
         status = "succeeded" if succeeded else "failed"
         with self._connect() as connection:
+            if audit_id is not None:
+                connection.execute(
+                    "UPDATE security_audit SET execution_status = ?, error_type = ? WHERE id = ?",
+                    (status, error_type[:100], audit_id),
+                )
+                return
             connection.execute(
                 """
                 UPDATE security_audit
