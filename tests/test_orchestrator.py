@@ -3,7 +3,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from noite.config import Settings  # noqa: E402
-from noite.orchestrator import ChatAgent, Orchestrator, PermissionLevel, check_permission  # noqa: E402
+from noite.orchestrator import ChatAgent, Orchestrator  # noqa: E402
 
 
 class _FakeService:
@@ -72,13 +72,6 @@ def test_orchestrator_plan_records_intent(tmp_path):
 
     answer = asyncio.run(run())
     assert answer.startswith("eco:")
-
-
-def test_permission_check_requires_current_level_to_meet_request():
-    assert check_permission(PermissionLevel.REGULAR, PermissionLevel.REGULAR)
-    assert check_permission(PermissionLevel.REGULAR, PermissionLevel.FULL)
-    assert not check_permission(PermissionLevel.FULL, PermissionLevel.REGULAR)
-    assert not check_permission(PermissionLevel.REGULAR, PermissionLevel.NONE)
 
 
 def test_orchestrator_timeout_is_enforced():

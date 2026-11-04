@@ -1,6 +1,12 @@
 # Plano mestre de engenharia — Noite 2.0
 
+> **Histórico (não normativo).** A ordem de fases deste documento foi substituída
+> por [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md) em 2026-11-04, junto com as
+> decisões registradas em [ADR/](ADR/). O conteúdo abaixo fica preservado como
+> registro de execução; em caso de divergência, vale o roadmap atual.
+
 Este plano evolui o núcleo atual em fases pequenas. A execução não pula critérios de validação. Funcionalidades indisponíveis em APIs externas ficam explicitamente pendentes.
+
 
 ## Princípios permanentes
 

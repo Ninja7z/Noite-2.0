@@ -199,3 +199,52 @@ def test_path_guard_rejects_symlink_when_supported(tmp_path):
         pytest.skip("Symlink creation is unavailable")
     with pytest.raises(ValueError, match="Links simbólicos"):
         resolve_allowed_path(workspace, "linked/secret.txt")
+
+
+def test_profile_allows_matches_the_single_documented_order():
+    from noite.security import PROFILE_ORDER, profile_allows
+
+    assert PROFILE_ORDER == (
+        PermissionProfile.NONE,
+        PermissionProfile.RESTRICTED,
+        PermissionProfile.FULL,
+    )
+    assert profile_allows(PermissionProfile.RESTRICTED, PermissionProfile.RESTRICTED)
+    assert profile_allows(PermissionProfile.RESTRICTED, PermissionProfile.FULL)
+    assert not profile_allows(PermissionProfile.FULL, PermissionProfile.RESTRICTED)
+    assert not profile_allows(PermissionProfile.RESTRICTED, PermissionProfile.NONE)
+
+
+def test_execution_status_is_recorded_per_attempt(tmp_path):
+    manager = PermissionManager(tmp_path / "permissions.json")
+    manager.save_from_user(PermissionProfile.FULL, {Capability.FILE_READ})
+    audit = AuditLogger(tmp_path / "audit.sqlite3")
+    guard = ToolGuard(PolicyEngine(manager), ApprovalManager(), audit)
+    request = _request()
+
+    def boom(**kwargs):
+        raise RuntimeError("falha simulada")
+
+    with pytest.raises(RuntimeError):
+        guard.execute(request, boom)
+    assert guard.execute(request, lambda **kwargs: "ok") == "ok"
+
+    assert [row["execution_status"] for row in audit.recent()] == ["succeeded", "failed"]
+
+
+def test_expired_approvals_are_pruned(monkeypatch):
+    import time
+
+    from noite.security import approval_manager as approval_module
+
+    approvals = ApprovalManager(ttl_seconds=10)
+    request = _request(RiskLevel.R2)
+    stale = approvals.approve_from_ui(request)
+    future = time.monotonic() + 3600
+    monkeypatch.setattr(approval_module.time, "monotonic", lambda: future)
+
+    fresh = approvals.approve_from_ui(request)
+
+    assert len(approvals._grants) == 1
+    assert not approvals.consume(request, stale)
+    assert approvals.consume(request, fresh)

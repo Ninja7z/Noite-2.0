@@ -26,3 +26,10 @@
 - Permissões padrão são Sem acesso. Acesso restrito só permite leitura/escrita controladas; Acesso total continua sujeito a toggles, validação, aprovação e auditoria.
 - Aprovações são emitidas exclusivamente pelo fluxo confiável da interface, vinculadas ao fingerprint da ação e usadas uma única vez.
 - Alterações nas permissões são responsabilidade da interface de configurações; conteúdo externo e modelos nunca podem alterar a política.
+
+## Documentação e decisões
+- A fonte normativa é [`docs/README.md`](docs/README.md): visão, arquitetura, segurança, memória, roteamento de modelos, interface e roadmap. Documentos marcados como históricos não definem o plano atual.
+- Decisão arquitetural relevante exige ADR em [`docs/ADR/`](docs/ADR/) (contexto, decisão, alternativas, consequências). Alterar interface principal, fronteira de autorização, memória ou provedor padrão sem ADR é regressão.
+- Hipótese técnica (métrica de terceiro, "servidor X é read-only", latência prometida) não vira critério até ser medida no hardware alvo ou verificada na fonte oficial, com registro.
+- Nenhuma etapa é declarada concluída apenas porque os testes unitários passaram: exige também teste de integração/segurança e, quando aplicável, validação manual.
+- Regra de decisão: se a mudança não torna a Noite uma assistente melhor para o usuário, ela não entra — mesmo que a tecnologia seja interessante.

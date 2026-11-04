@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import threading
 
 import pytest
@@ -10,6 +11,10 @@ from noite.terminal import (
     is_destructive_command,
     run_terminal_command,
     validate_terminal_command,
+)
+
+requires_windows_powershell = pytest.mark.skipif(
+    sys.platform != "win32", reason="O executor de terminal depende do Windows PowerShell."
 )
 
 
@@ -54,6 +59,7 @@ def test_terminal_environment_omits_api_and_database_secrets(monkeypatch):
     assert "DB_PASSWORD" not in environment
 
 
+@requires_windows_powershell
 def test_terminal_runs_in_workspace_and_returns_real_exit_code(tmp_path):
     result = run_terminal_command("Get-Location", tmp_path)
     assert result.exit_code == 0
@@ -62,6 +68,7 @@ def test_terminal_runs_in_workspace_and_returns_real_exit_code(tmp_path):
     assert result.duration_ms >= 0
 
 
+@requires_windows_powershell
 def test_terminal_can_cancel_an_active_process(tmp_path):
     cancel = threading.Event()
     timer = threading.Timer(0.3, cancel.set)
@@ -73,6 +80,7 @@ def test_terminal_can_cancel_an_active_process(tmp_path):
     assert result.cancelled
 
 
+@requires_windows_powershell
 def test_terminal_timeout_kills_job_tree(tmp_path):
     result = run_terminal_command(
         "Start-Sleep -Seconds 5", tmp_path, advanced=True, timeout_seconds=1
@@ -81,6 +89,7 @@ def test_terminal_timeout_kills_job_tree(tmp_path):
     assert result.duration_ms < 4000
 
 
+@requires_windows_powershell
 def test_terminal_output_is_capped_and_nonzero_exit_is_returned(tmp_path):
     result = run_terminal_command(
         "1..5000 | ForEach-Object { 'x' * 1000 }",
