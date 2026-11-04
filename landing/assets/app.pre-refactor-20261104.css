@@ -1,0 +1,171 @@
+/* Noite: base minimalista. Tokens, layout e componentes do chat. */
+:root{
+  color-scheme:dark;
+  --bg:#0c0c12;
+  --surface:#13131c;
+  --raised:#1a1a26;
+  --line:rgba(255,255,255,.07);
+  --text:#ecebf3;
+  --muted:#8c8aa2;
+  --faint:#5e5c74;
+  --accent:#9d8fff;
+  --accent-ink:#0d0c16;
+  --ok:#7fd3a8;
+  --error:#e89a9a;
+  --font-ui:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  --font-display:Georgia,"Times New Roman",serif;
+}
+@media (prefers-color-scheme: light){
+  :root{
+    color-scheme:light;
+    --bg:#f7f6fb;
+    --surface:#ffffff;
+    --raised:#efedf7;
+    --line:rgba(20,18,40,.09);
+    --text:#1c1b26;
+    --muted:#6c6a80;
+    --faint:#9a98ad;
+    --accent:#6a58d8;
+    --accent-ink:#ffffff;
+    --ok:#2f9e6e;
+    --error:#c0474f;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--font-ui);-webkit-font-smoothing:antialiased}
+body{overflow:hidden}
+[hidden]{display:none!important}
+button,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* Estrutura */
+.app-shell{height:100dvh;min-height:520px;display:grid;grid-template-columns:248px minmax(0,1fr)}
+
+/* Sidebar */
+.sidebar{height:100dvh;min-height:0;display:flex;flex-direction:column;padding:18px 12px 14px;background:var(--surface);border-right:1px solid var(--line);z-index:30}
+.side-head{display:flex;align-items:center;justify-content:space-between;padding:4px 8px 16px}
+.brand{font-family:var(--font-display);font-size:22px;letter-spacing:-.3px;color:var(--text);text-decoration:none}
+.new-chat{display:flex;align-items:center;gap:10px;width:100%;height:40px;padding:0 12px;border:1px solid var(--line);border-radius:10px;background:transparent;font-size:13px}
+.new-chat:hover{background:var(--raised)}
+.new-chat>span{font-size:16px;color:var(--accent)}
+.new-chat kbd{margin-left:auto;font:500 10px var(--font-ui);color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:2px 5px}
+.nav{display:flex;flex-direction:column;gap:2px;margin-top:12px}
+.workspace-link{display:flex;align-items:center;gap:10px;width:100%;height:34px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--muted);font-size:13px;text-align:left}
+.workspace-link:hover{background:var(--raised);color:var(--text)}
+.workspace-link.is-active{background:var(--raised);color:var(--text)}
+.nav-icon{width:16px;text-align:center;font-size:13px;color:var(--faint)}
+.workspace-link.is-active .nav-icon{color:var(--accent)}
+.workspace-link small{margin-left:auto;font-size:10px;color:var(--faint)}
+.recent{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;margin-top:20px;overflow:hidden}
+.section-label{padding:0 10px 8px;font-size:11px;color:var(--faint)}
+.conversation-list{flex:1;min-height:0;display:flex;flex-direction:column;gap:2px;overflow-y:auto;scrollbar-width:thin}
+.conversation-item{display:flex;align-items:center;gap:8px;width:100%;min-width:0;padding:8px 10px;border-radius:8px;color:var(--muted);font-size:13px;cursor:pointer}
+.conversation-item:hover{background:var(--raised);color:var(--text)}
+.conversation-item.active{background:var(--raised);color:var(--text)}
+.conv-icon{display:none}
+.conv-title{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.conv-menu{opacity:0;border:0;background:transparent;color:var(--muted);font-size:15px;padding:0 4px}
+.conversation-item:hover .conv-menu,.conversation-item.active .conv-menu{opacity:1}
+.side-status{display:flex;align-items:center;gap:8px;padding:12px 10px 2px;font-size:12px;color:var(--muted)}
+.presence-indicator{width:6px;height:6px;border-radius:50%;background:var(--faint)}
+.presence-indicator.online{background:var(--ok)}
+.activity-empty{font-size:13px;color:var(--faint);line-height:1.6;padding:0 10px}
+
+/* Área principal */
+.main-area{min-width:0;min-height:0;height:100dvh;display:flex;flex-direction:column}
+.topbar{height:56px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 20px}
+.top-left,.top-right{display:flex;align-items:center;gap:12px;min-width:0}
+.area-title{margin:0;font-size:14px;font-weight:500;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.model-status{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);white-space:nowrap}
+.status-dot{width:6px;height:6px;border-radius:50%;background:var(--faint)}
+.model-status.online .status-dot{background:var(--ok)}
+.model-status.offline .status-dot{background:var(--error)}
+.model-name{font-size:12px;color:var(--faint);padding:4px 10px;border:1px solid var(--line);border-radius:999px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.icon-btn{width:32px;height:32px;display:inline-grid;place-items:center;border:0;border-radius:8px;background:transparent;color:var(--muted);font-size:16px}
+.icon-btn:hover{background:var(--raised);color:var(--text)}
+.menu-open,.mobile-close{display:none}
+.panel-close{display:inline-grid;place-items:center}
+
+.workspace{flex:1;min-height:0;display:flex;position:relative}
+.chat-column{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
+.messages{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--raised) transparent;padding:32px clamp(20px,8vw,160px) 16px}
+
+/* Boas-vindas */
+.welcome{max-width:640px;min-height:100%;margin:0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px 0 40px;animation:fade-up .5s ease both}
+.welcome-title{margin:0;font-family:var(--font-display);font-weight:400;font-size:clamp(30px,4vw,42px);letter-spacing:-.6px;line-height:1.15}
+.welcome-sub{margin:10px 0 0;color:var(--muted);font-size:15px}
+.suggestions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:28px}
+.suggestion{padding:8px 14px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--muted);font-size:13px}
+.suggestion:hover{color:var(--text);border-color:var(--line);background:var(--raised)}
+
+/* Mensagens: sem caixa, sem fundo */
+.message{max-width:720px;margin:0 auto 24px;display:flex;gap:10px;animation:message-in .2s ease both}
+.message.user{justify-content:flex-end}
+.message-avatar{display:none}
+.message-content{max-width:min(86%,680px);font-size:15px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}
+.message.user .message-content{text-align:right;color:var(--text)}
+.message.assistant .message-content{color:var(--text)}
+.message-meta{display:block;font-size:12px;color:var(--faint);margin-bottom:4px}
+.message.pending .message-content:after{content:"";display:inline-block;width:2px;height:1em;margin-left:3px;background:var(--accent);vertical-align:-2px;animation:blink 1s steps(2) infinite}
+.message-error .message-content{color:var(--error)}
+
+/* Campo de mensagem */
+.composer-wrap{flex-shrink:0;padding:8px clamp(16px,8vw,160px) 14px}
+.composer{max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:6px;padding:12px 14px 8px;border:1px solid var(--line);border-radius:16px;background:var(--surface);transition:border-color .2s}
+.composer:focus-within{border-color:color-mix(in srgb,var(--accent) 45%,transparent)}
+.composer textarea{display:block;width:100%;min-height:24px;max-height:160px;resize:none;border:0;outline:0;background:transparent;font-size:15px;line-height:1.55;color:var(--text)}
+.composer textarea::placeholder{color:var(--faint)}
+.composer-bottom{display:flex;align-items:center;justify-content:flex-end;gap:10px}
+.char-count{margin-right:auto;font-size:11px;color:var(--faint)}
+.send-btn{width:32px;height:32px;display:grid;place-items:center;border:0;border-radius:10px;background:var(--accent);color:var(--accent-ink);font-size:17px;font-weight:600;transition:opacity .15s}
+.send-btn:disabled{opacity:.3;cursor:not-allowed}
+.composer-disclaimer{max-width:720px;margin:8px auto 0;text-align:center;font-size:11px;color:var(--faint)}
+
+/* Painel de atividade: fechado por padrão, abre sobre a conversa */
+.activity-panel{position:fixed;top:0;right:0;bottom:0;z-index:40;width:320px;max-width:90vw;display:flex;flex-direction:column;gap:18px;padding:22px 20px;overflow-y:auto;background:var(--surface);border-left:1px solid var(--line);transform:translateX(104%);transition:transform .25s ease}
+.activity-panel.open{transform:translateX(0)}
+.panel-heading{display:flex;align-items:center;justify-content:space-between}
+.panel-heading h2{margin:0;font-size:15px;font-weight:600}
+.status-block{display:flex;flex-direction:column;gap:4px}
+.status-tag{font-size:11px;color:var(--faint)}
+.status-block h3{margin:0;font-size:14px;font-weight:600}
+.status-block p{margin:0;font-size:13px;line-height:1.6;color:var(--muted)}
+.activity-list{display:flex;flex-direction:column;gap:12px}
+.activity-list .activity-empty{padding:0}
+.activity-item{display:grid;grid-template-columns:16px 1fr;gap:8px}
+.activity-symbol{color:var(--accent);font-size:12px;line-height:1.6}
+.activity-item b{display:block;font-size:13px;font-weight:500}
+.activity-item small{display:block;margin-top:2px;font-size:12px;color:var(--faint)}
+.mobile-scrim{display:none}
+.mobile-scrim.show{display:block;position:fixed;inset:0;z-index:35;background:transparent}
+
+/* Avisos */
+.toast-region{position:fixed;right:20px;bottom:20px;z-index:100;display:flex;flex-direction:column;gap:8px}
+.toast{padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--raised);font-size:13px;box-shadow:0 10px 30px rgba(0,0,0,.25);animation:message-in .2s ease}
+.toast.error{color:var(--error)}
+
+@keyframes message-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes fade-up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes blink{50%{opacity:0}}
+
+/* Telas menores: sidebar vira gaveta */
+@media (max-width:850px){
+  .app-shell{grid-template-columns:minmax(0,1fr)}
+  .sidebar{position:fixed;left:0;top:0;width:min(280px,86vw);transform:translateX(-102%);transition:transform .25s ease;box-shadow:12px 0 40px rgba(0,0,0,.35)}
+  .sidebar.open{transform:translateX(0)}
+  .mobile-close,.menu-open{display:inline-grid;place-items:center}
+  .mobile-scrim.show{background:rgba(0,0,0,.45)}
+  .messages{padding:24px 18px 12px}
+  .composer-wrap{padding:8px 14px 12px}
+  .model-name{display:none}
+}
+@media (max-width:560px){
+  .topbar{height:52px;padding:0 12px}
+  .toast-region{left:12px;right:12px;bottom:12px}
+  .toast{text-align:center}
+  .welcome-title{font-size:32px}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0c0c12">
+  <meta name="description" content="Noite: assistente local.">
+  <title>Noite</title>
+  <link rel="stylesheet" href="assets/app.css">
+  <link rel="stylesheet" href="assets/interface.css">
+  <script src="assets/app.js" defer></script>
+  <script src="assets/interface.js" defer></script>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="side-head">
+      <a class="brand" href="/" aria-label="Noite, início">Noite</a>
+      <button class="icon-btn mobile-close" id="close-sidebar" aria-label="Fechar menu">×</button>
+    </div>
+
+    <button class="new-chat" id="new-chat"><span>+</span> Nova conversa <kbd>Ctrl K</kbd></button>
+
+    <nav class="nav" aria-label="Áreas">
+      <button class="workspace-link is-active" data-view="chat"><span class="nav-icon">◌</span><span>Conversas</span></button>
+      <button class="workspace-link" data-view="activity"><span class="nav-icon">⌁</span><span>Atividades</span></button>
+      <button class="workspace-link" data-view="projects"><span class="nav-icon">▦</span><span>Projetos</span><small>em breve</small></button>
+      <button class="workspace-link" data-view="memory"><span class="nav-icon">◈</span><span>Memória</span><small>em breve</small></button>
+      <button class="workspace-link" data-view="tools"><span class="nav-icon">⌘</span><span>Ferramentas</span><small>em breve</small></button>
+      <button class="workspace-link" data-view="settings"><span class="nav-icon">⚙</span><span>Configurações</span><small>em breve</small></button>
+    </nav>
+
+    <div class="recent">
+      <div class="section-label">Recentes</div>
+      <div class="conversation-list" id="conversation-list" aria-label="Conversas"></div>
+    </div>
+
+    <div class="side-status">
+      <span class="presence-indicator" id="presence-indicator"></span>
+      <span id="side-status">Iniciando…</span>
+    </div>
+  </aside>
+
+  <main class="main-area">
+    <header class="topbar">
+      <div class="top-left">
+        <button class="icon-btn menu-open" id="open-sidebar" aria-label="Abrir menu">☰</button>
+        <h1 class="area-title" id="current-title">Nova conversa</h1>
+      </div>
+      <div class="top-right">
+        <div class="model-status" id="model-status"><span class="status-dot"></span><span>Conectando</span></div>
+        <span class="model-name" id="model-name">Consultando…</span>
+        <button class="icon-btn" id="activity-toggle" aria-label="Mostrar atividade" title="Atividade">⌁</button>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <section class="chat-column">
+        <div class="messages" id="messages" aria-live="polite">
+          <div class="welcome" id="welcome">
+            <h2 class="welcome-title">O que vamos fazer?</h2>
+            <p class="welcome-sub">Estou pronta para trabalhar.</p>
+            <div class="suggestions">
+              <button class="suggestion" data-prompt="Vamos continuar o desenvolvimento do projeto Noite 2.0.">Continuar o projeto Noite 2.0</button>
+              <button class="suggestion" data-prompt="Me ajude a organizar uma tarefa no meu computador.">Organizar uma tarefa</button>
+              <button class="suggestion" data-prompt="Quais capacidades estão disponíveis agora?">Ver o que está disponível</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="composer-wrap">
+          <form class="composer" id="composer">
+            <textarea id="message-input" rows="1" maxlength="12000" placeholder="Envie uma mensagem..." aria-label="Sua mensagem"></textarea>
+            <div class="composer-bottom">
+              <span class="char-count" id="char-count"></span>
+              <button class="send-btn" id="send-btn" type="submit" aria-label="Enviar mensagem">↑</button>
+            </div>
+          </form>
+          <p class="composer-disclaimer">A Noite pode cometer erros. Revise informações importantes.</p>
+        </div>
+      </section>
+
+      <aside class="activity-panel" id="activity-panel" aria-label="Atividade">
+        <div class="panel-heading">
+          <h2>Atividade</h2>
+          <button class="icon-btn panel-close" id="activity-close" aria-label="Fechar atividade">×</button>
+        </div>
+        <div class="status-block">
+          <span class="status-tag" id="system-tag">Inicializando</span>
+          <h3 id="system-title">Preparando a Noite</h3>
+          <p id="system-description">Verificando o motor local.</p>
+        </div>
+        <div class="section-label">Passos</div>
+        <div class="activity-list" id="activity-list">
+          <div class="activity-empty">As atividades aparecem aqui durante a conversa.</div>
+        </div>
+      </aside>
+    </section>
+  </main>
+</div>
+<div class="mobile-scrim" id="mobile-scrim"></div>
+<div class="toast-region" id="toast-region" aria-live="polite"></div>
+</body>
+</html>

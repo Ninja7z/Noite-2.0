@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#090a11">
+  <meta name="description" content="Interface local da Noite 2.0.">
+  <title>Noite 2.0</title>
+  <link rel="stylesheet" href="assets/app.css">
+  <link rel="stylesheet" href="assets/interface.css">
+  <script src="assets/app.js" defer></script>
+  <script src="assets/interface.js" defer></script>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="side-head">
+      <a class="brand" href="/" aria-label="Noite, início">
+        <span class="brand-symbol"><i></i><i></i><i></i><i></i></span>
+        <span>noite<span class="brand-dot">.</span><small>2.0</small></span>
+      </a>
+      <button class="icon-btn mobile-close" id="close-sidebar" aria-label="Fechar menu">×</button>
+    </div>
+
+    <button class="new-chat" id="new-chat"><span>＋</span> Nova conversa <kbd>Ctrl K</kbd></button>
+
+    <div class="nav-group">
+      <div class="side-label">ESPAÇO DE TRABALHO</div>
+      <button class="workspace-link is-active" data-view="chat"><span class="nav-icon">◌</span><span>Conversas</span></button>
+      <button class="workspace-link" data-view="projects"><span class="nav-icon">▦</span><span>Projetos</span><small>EM BREVE</small></button>
+      <button class="workspace-link" data-view="activity"><span class="nav-icon">⌁</span><span>Atividades</span></button>
+    </div>
+
+    <div class="nav-group nav-group-secondary">
+      <div class="side-label">NOITE</div>
+      <button class="workspace-link" data-view="memory"><span class="nav-icon">◈</span><span>Memória</span><small>EM BREVE</small></button>
+      <button class="workspace-link" data-view="tools"><span class="nav-icon">⌘</span><span>Ferramentas</span><small>EM BREVE</small></button>
+      <button class="workspace-link" data-view="settings"><span class="nav-icon">⚙</span><span>Configurações</span><small>EM BREVE</small></button>
+    </div>
+
+    <div class="conversation-area">
+      <div class="conversation-heading"><span>CONVERSAS RECENTES</span><button id="new-chat-small" title="Nova conversa" aria-label="Nova conversa">＋</button></div>
+      <div class="conversation-list" id="conversation-list" aria-label="Conversas"></div>
+    </div>
+
+    <div class="side-spacer"></div>
+    <div class="side-presence">
+      <div class="presence-avatar"><span class="presence-core"></span></div>
+      <div><b>Noite</b><small id="side-status">Iniciando ambiente...</small></div>
+      <span class="presence-indicator" id="presence-indicator"></span>
+    </div>
+    <div class="side-footer"><span>NOITE 2.0</span><span>LOCAL-FIRST</span></div>
+  </aside>
+
+  <main class="main-area">
+    <header class="topbar">
+      <div class="top-left">
+        <button class="icon-btn menu-open" id="open-sidebar" aria-label="Abrir menu">☰</button>
+        <div class="breadcrumb"><span>Workspace</span><b>/</b><strong id="current-title">Nova conversa</strong></div>
+      </div>
+      <div class="top-right">
+        <div class="model-status" id="model-status"><span class="status-dot"></span><span>Conectando</span></div>
+        <button class="icon-btn" id="activity-toggle" aria-label="Mostrar atividade" title="Atividade">⌁</button>
+        <button class="profile-mark" title="Noite 2.0">N</button>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <section class="chat-column">
+        <div class="messages" id="messages" aria-live="polite">
+          <div class="welcome" id="welcome">
+            <div class="welcome-orb" aria-hidden="true">
+              <div class="orb-ring orb-ring-one"></div>
+              <div class="orb-ring orb-ring-two"></div>
+              <div class="orb-core"><span></span><span></span><span></span></div>
+              <i class="orb-spark spark-one"></i><i class="orb-spark spark-two"></i>
+            </div>
+            <div class="welcome-eyebrow"><span></span> NOITE 2.0 <i></i> AMBIENTE LOCAL</div>
+            <h1>O que vamos<br><em>fazer agora?</em></h1>
+            <p>Converse, continue um projeto ou peça ajuda com uma tarefa. O contexto e as ferramentas da Noite trabalham nos bastidores.</p>
+            <div class="suggestions">
+              <button class="suggestion" data-prompt="Vamos continuar o desenvolvimento do projeto Noite 2.0."><span>⌘</span><b>Continuar um projeto</b><small>Retome o contexto de trabalho</small></button>
+              <button class="suggestion" data-prompt="Me ajude a organizar uma tarefa no meu computador."><span>▤</span><b>Trabalhar com arquivos</b><small>Planeje uma tarefa no computador</small></button>
+              <button class="suggestion" data-prompt="Quais capacidades estão disponíveis agora?"><span>◈</span><b>Explorar capacidades</b><small>Veja o que está disponível</small></button>
+            </div>
+          </div>
+        </div>
+
+        <div class="composer-wrap">
+          <form class="composer" id="composer">
+            <textarea id="message-input" rows="1" maxlength="12000" placeholder="Escreva para a Noite..." aria-label="Sua mensagem"></textarea>
+            <div class="composer-bottom">
+              <div class="composer-hints"><span class="secure-icon">⌑</span><span>Sessão local protegida</span></div>
+              <div class="composer-actions"><span class="char-count" id="char-count"></span><button class="send-btn" id="send-btn" type="submit" aria-label="Enviar mensagem"><span>↑</span></button></div>
+            </div>
+          </form>
+          <p class="composer-disclaimer">A Noite pode cometer erros. Revise informações importantes e aprove ações sensíveis.</p>
+        </div>
+      </section>
+
+      <aside class="activity-panel" id="activity-panel">
+        <div class="panel-heading"><div><span class="panel-kicker">PAINEL DE CONTEXTO</span><h2>Visão geral</h2></div><button class="icon-btn panel-close" id="activity-close" aria-label="Fechar atividade">×</button></div>
+        <div class="status-card">
+          <div class="status-card-top"><span class="status-orb"><i></i></span><span class="status-tag" id="system-tag">INICIALIZANDO</span></div>
+          <h3 id="system-title">Preparando a Noite</h3>
+          <p id="system-description">Verificando o motor local e o ambiente.</p>
+          <div class="status-divider"></div>
+          <div class="status-meta"><span>Modelo ativo</span><b id="model-name">Consultando...</b></div>
+          <div class="status-meta"><span>Execução</span><b>Local-first</b></div>
+        </div>
+        <div class="activity-heading"><div><span class="panel-kicker">ACOMPANHAMENTO</span><h3>Atividade recente</h3></div><span class="activity-live"><i></i> AO VIVO</span></div>
+        <div class="activity-list" id="activity-list"><div class="activity-empty">As atividades aparecem aqui durante a execução.</div></div>
+        <div class="privacy-note"><span>◇</span><div><b>Você mantém o controle</b><p>Ações e permissões devem ser claras. Operações sensíveis exigem aprovação.</p></div></div>
+        <div class="panel-bottom"><span class="mini-lock">⌑</span> AMBIENTE LOCAL · SESSÃO PROTEGIDA</div>
+      </aside>
+    </section>
+  </main>
+</div>
+<div class="mobile-scrim" id="mobile-scrim"></div>
+<div class="toast-region" id="toast-region" aria-live="polite"></div>
+</body>
+</html>

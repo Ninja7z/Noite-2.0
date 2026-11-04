@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090910">
+  <meta name="description" content="Noite 2.0 é uma assistente pessoal local-first para Windows. Conversa, entende contexto e executa ações com você no controle.">
+  <meta property="og:title" content="Noite 2.0 — Inteligência que age com você">
+  <meta property="og:description" content="Uma assistente pessoal para o seu desktop. Local-first, contextual e sob seu controle.">
+  <title>Noite 2.0 — Inteligência que age com você</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <div class="ambient ambient-one" aria-hidden="true"></div>
+  <div class="ambient ambient-two" aria-hidden="true"></div>
+  <header class="site-header" id="top">
+    <nav class="nav shell" aria-label="Navegação principal">
+      <a class="brand" href="#top" aria-label="Noite 2.0, início">
+        <span class="brand-mark" aria-hidden="true"><span></span><span></span></span>
+        <span>noite<span class="brand-version">.2</span></span>
+      </a>
+      <button class="menu-toggle" type="button" aria-label="Abrir menu" aria-expanded="false" aria-controls="nav-links">
+        <span></span><span></span>
+      </button>
+      <div class="nav-links" id="nav-links">
+        <a href="#essencia">A Noite</a>
+        <a href="#capacidades">Capacidades</a>
+        <a href="#arquitetura">Como funciona</a>
+        <a class="nav-cta local-app-link" href="http://127.0.0.1:8766/" target="_blank" rel="noreferrer" hidden>Entrar na Noite <span aria-hidden="true">↗</span></a>
+        <a class="nav-cta" href="https://github.com/Ninja7z/Noite-2.0" target="_blank" rel="noreferrer">Ver projeto <span aria-hidden="true">↗</span></a>
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero shell">
+      <div class="hero-copy">
+        <div class="eyebrow"><span class="eyebrow-dot"></span> ASSISTENTE PESSOAL · LOCAL-FIRST</div>
+        <h1>Seu computador.<br>Uma nova <span class="gradient-text">presença.</span></h1>
+        <p class="hero-lead">A Noite entende o que você precisa, acompanha seu contexto e transforma pedidos em ações. Uma assistente feita para estar com você, não só responder numa caixa de texto.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="https://github.com/Ninja7z/Noite-2.0" target="_blank" rel="noreferrer">Conhecer o projeto <span aria-hidden="true">↗</span></a>
+          <a class="button button-quiet" href="#demo"><span class="play-icon" aria-hidden="true">▶</span> Ver por dentro</a>
+        </div>
+        <div class="hero-meta">
+          <span><i class="meta-check" aria-hidden="true">✓</i> Privacidade em primeiro lugar</span>
+          <span><i class="meta-check" aria-hidden="true">✓</i> Você aprova as ações</span>
+        </div>
+      </div>
+
+      <div class="hero-stage" aria-label="Ilustração do mascote Noite">
+        <div class="stage-orbit orbit-a"></div>
+        <div class="stage-orbit orbit-b"></div>
+        <div class="stage-glow"></div>
+        <div class="stage-label stage-label-top"><span class="live-dot"></span> NOITE / ONLINE</div>
+        <div class="mascot-wrap">
+          <div class="mascot-shadow"></div>
+          <svg class="mascot" viewBox="0 0 300 310" role="img" aria-labelledby="mascot-title mascot-desc">
+            <title id="mascot-title">Mascote robótico da Noite</title>
+            <desc id="mascot-desc">Pequeno robô branco com visor escuro e olhos azul-ciano luminosos.</desc>
+            <defs>
+              <linearGradient id="shell" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff"/><stop offset=".55" stop-color="#dce2f0"/><stop offset="1" stop-color="#aeb9d2"/></linearGradient>
+              <linearGradient id="visor" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#172139"/><stop offset="1" stop-color="#070b16"/></linearGradient>
+              <linearGradient id="eye" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#b8ffff"/><stop offset=".45" stop-color="#42eaff"/><stop offset="1" stop-color="#278cff"/></linearGradient>
+              <filter id="eyeGlow" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="5" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+              <filter id="bodyShadow" x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dx="0" dy="18" stdDeviation="14" flood-color="#02030a" flood-opacity=".48"/></filter>
+            </defs>
+            <ellipse cx="150" cy="282" rx="78" ry="13" fill="#02030a" opacity=".5"/>
+            <g filter="url(#bodyShadow)">
+              <path d="M111 231h78l10 42q-49 21-98 0z" fill="url(#shell)"/>
+              <path d="M93 244q57 23 114 0l-5 25q-52 19-104 0z" fill="#b7c2d8"/>
+              <rect x="65" y="50" width="170" height="184" rx="59" fill="url(#shell)" stroke="#fff" stroke-opacity=".9" stroke-width="3"/>
+              <path d="M80 83q10-28 42-30h56q38 0 43 32" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" opacity=".75"/>
+              <rect x="79" y="93" width="142" height="104" rx="36" fill="url(#visor)" stroke="#8da4c9" stroke-opacity=".5" stroke-width="2"/>
+              <path d="M95 106q24-12 51-10" stroke="#9ab1d5" stroke-opacity=".2" stroke-width="3" fill="none" stroke-linecap="round"/>
+              <g filter="url(#eyeGlow)" fill="url(#eye)">
+                <rect x="108" y="132" width="23" height="31" rx="8"/>
+                <rect x="169" y="132" width="23" height="31" rx="8"/>
+              </g>
+              <path d="M125 179q25 9 50 0" fill="none" stroke="#4deaff" stroke-opacity=".38" stroke-width="2" stroke-linecap="round"/>
+              <circle cx="65" cy="145" r="9" fill="#d9e1ef" stroke="#aab7cf" stroke-width="2"/>
+              <circle cx="235" cy="145" r="9" fill="#d9e1ef" stroke="#aab7cf" stroke-width="2"/>
+              <path d="M150 50V34" stroke="#c8d3e8" stroke-width="7" stroke-linecap="round"/>
+              <circle cx="150" cy="28" r="10" fill="#eaf2ff" stroke="#a8b7d3" stroke-width="3"/>
+              <circle cx="150" cy="28" r="3.5" fill="#54eaff"/>
+              <path d="M109 231l-5 17m87-17 5 17" stroke="#9caac4" stroke-width="5" stroke-linecap="round"/>
+            </g>
+          </svg>
+        </div>
+        <div class="stage-caption"><span class="caption-pulse"></span><span>Presente no seu desktop</span></div>
+        <div class="float-card float-card-context">
+          <span class="float-icon">⌘</span><span><b>Contexto ativo</b><small>Seu projeto continua com você</small></span>
+          <span class="float-status"></span>
+        </div>
+        <div class="float-card float-card-action">
+          <span class="float-icon action-icon">✓</span><span><b>Ação sob controle</b><small>Você decide antes de executar</small></span>
+        </div>
+      </div>
+      <div class="hero-scroll" aria-hidden="true"><span></span> ROLE PARA EXPLORAR</div>
+    </section>
+
+    <section class="trust-strip">
+      <div class="shell trust-inner">
+        <span>FEITA PARA O SEU FLUXO</span>
+        <div><b>LOCAL-FIRST</b><i></i><b>PT-BR</b><i></i><b>WINDOWS</b><i></i><b>OPEN SOURCE</b></div>
+      </div>
+    </section>
+
+    <section class="section shell intro-section" id="essencia">
+      <div class="section-kicker">01 / A IDEIA</div>
+      <div class="intro-grid">
+        <h2>Menos janela.<br><span class="muted-text">Mais companhia.</span></h2>
+        <div class="intro-copy">
+          <p class="large-copy">A Noite não quer ser mais uma aba aberta. Ela vive no seu desktop, pronta para conversar, entender o contexto e ajudar a fazer o trabalho acontecer.</p>
+          <p>Uma identidade própria, independente do modelo por trás. A tecnologia muda. A sua assistente continua sendo a Noite.</p>
+        </div>
+      </div>
+      <div class="principles-grid">
+        <article class="principle-card">
+          <span class="principle-number">01</span><div class="principle-icon">◉</div>
+          <h3>Presença</h3><p>Um mascote leve e flutuante, com estados visuais que mostram quando está pensando, trabalhando ou pronta.</p>
+        </article>
+        <article class="principle-card">
+          <span class="principle-number">02</span><div class="principle-icon">⌁</div>
+          <h3>Inteligência</h3><p>Conversa em português, acompanha o fio das ideias e recupera o contexto que realmente importa.</p>
+        </article>
+        <article class="principle-card">
+          <span class="principle-number">03</span><div class="principle-icon">⛨</div>
+          <h3>Controle</h3><p>A Noite pode propor ações. As permissões e aprovações continuam nas mãos de quem usa.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="demo-section" id="demo">
+      <div class="shell demo-layout">
+        <div class="demo-copy">
+          <div class="section-kicker">02 / NA PRÁTICA</div>
+          <h2>Da intenção<br>à <span class="gradient-text">ação.</span></h2>
+          <p>Você explica o que precisa. A Noite entende, apresenta o próximo passo e respeita suas permissões.</p>
+          <div class="demo-controls" role="group" aria-label="Escolha uma demonstração">
+            <button class="demo-tab is-active" type="button" data-demo="files" aria-pressed="true">Organizar arquivos</button>
+            <button class="demo-tab" type="button" data-demo="project" aria-pressed="false">Entender um projeto</button>
+          </div>
+          <p class="demo-note">Demonstração ilustrativa da experiência. Não representa uma execução real no seu computador.</p>
+        </div>
+        <div class="demo-window" aria-live="polite">
+          <div class="window-topbar">
+            <div class="window-dots"><i></i><i></i><i></i></div>
+            <div class="window-title"><span class="mini-brand">n.</span> Noite <span class="window-tag">PREVIEW</span></div>
+            <span class="window-menu">•••</span>
+          </div>
+          <div class="window-body">
+            <div class="chat-date">HOJE, 10:42</div>
+            <div class="chat-message user-message" id="demo-prompt">Encontre os arquivos mais pesados da minha pasta Downloads.</div>
+            <div class="assistant-line"><span class="mini-avatar">n.</span><div><b>Noite</b><span class="thinking-label">Entendendo seu pedido...</span></div></div>
+            <div class="action-panel">
+              <div class="action-heading"><span class="action-check">✓</span><span id="action-title">Plano de leitura</span><span class="safe-label">SOMENTE LEITURA</span></div>
+              <p id="action-description">Vou analisar os itens da pasta Downloads e ordenar os maiores primeiro.</p>
+              <div class="terminal-line"><span class="terminal-prompt">›</span><code id="demo-command">workspace.list_files("Downloads")</code></div>
+              <div class="file-results" id="demo-results">
+                <div class="result-heading">ITENS ENCONTRADOS <span>3 resultados de exemplo</span></div>
+                <div class="file-row"><span class="file-type zip">ZIP</span><span class="file-name">backup-projeto.zip</span><b>890 MB</b></div>
+                <div class="file-row"><span class="file-type folder">DIR</span><span class="file-name">node_modules</span><b>1,2 GB</b></div>
+                <div class="file-row"><span class="file-type file">CRX</span><span class="file-name">chrome_dump.crx</span><b>2,4 GB</b></div>
+              </div>
+              <div class="action-footer"><span><i></i> Nenhum arquivo foi alterado</span><span>EXEMPLO</span></div>
+            </div>
+            <div class="chat-input"><span>Converse com a Noite...</span><kbd>↵</kbd></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section shell capabilities-section" id="capacidades">
+      <div class="section-kicker">03 / CAPACIDADES</div>
+      <div class="section-heading-row"><h2>Feita para ir<br><span class="muted-text">além da conversa.</span></h2><p>Uma base modular que cresce com cuidado. Cada capacidade precisa funcionar de verdade, não só parecer bonita numa lista.</p></div>
+      <div class="capability-grid">
+        <article class="capability-card capability-large">
+          <div class="capability-top"><span class="capability-icon">⌘</span><span class="capability-index">01 — AÇÃO</span></div>
+          <h3>Computer Use</h3><p>Interação com arquivos, ferramentas e tarefas do computador por fluxos controlados e auditáveis.</p>
+          <div class="capability-art art-terminal"><span>NOITE / WORKSPACE</span><code><i>›</i> localizar projeto</code><code><i>›</i> analisar estrutura</code><code class="terminal-success"><i>✓</i> pronto para revisar</code></div>
+        </article>
+        <article class="capability-card">
+          <div class="capability-top"><span class="capability-icon">◌</span><span class="capability-index">02 — CONTEXTO</span></div>
+          <h3>Memória contextual</h3><p>Histórico e contexto de projeto para continuar de onde a conversa parou.</p>
+          <div class="memory-art"><span class="memory-node node-a"></span><span class="memory-node node-b"></span><span class="memory-node node-c"></span><span class="memory-link link-a"></span><span class="memory-link link-b"></span><span class="memory-link link-c"></span><span class="memory-core">n.</span></div>
+        </article>
+        <article class="capability-card">
+          <div class="capability-top"><span class="capability-icon">⛨</span><span class="capability-index">03 — PRIVACIDADE</span></div>
+          <h3>Você no controle</h3><p>Permissões explícitas, aprovação antes de ações sensíveis e limites claros para cada ferramenta.</p>
+          <div class="permission-art"><span class="permission-shield">✓</span><span>APROVAÇÃO NECESSÁRIA</span><b>Você decide.</b></div>
+        </article>
+        <article class="capability-card capability-wide">
+          <div class="capability-top"><span class="capability-icon">⌁</span><span class="capability-index">04 — IDENTIDADE</span></div>
+          <h3>Uma assistente. Diferentes motores.</h3><p>A personalidade e a experiência pertencem à Noite. Modelos e integrações são componentes substituíveis, não a identidade do produto.</p>
+          <div class="model-pills"><span>Ollama local <i>●</i></span><span>Integrações opcionais <i>↗</i></span><span>Gateway de modelos <i>◇</i></span></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="architecture-section" id="arquitetura">
+      <div class="shell architecture-layout">
+        <div><div class="section-kicker">04 / POR BAIXO DA SUPERFÍCIE</div><h2>Uma experiência<br><span class="gradient-text">própria.</span></h2><p class="architecture-lead">A Noite mantém sua interface e sua identidade. Integrações trabalham nos bastidores, sem tomar o lugar da assistente.</p></div>
+        <div class="architecture-stack">
+          <div class="stack-card stack-front"><span class="stack-symbol">n.</span><div><b>Experiência Noite</b><small>Mascote, conversa e contexto</small></div><span class="stack-badge">INTERFACE</span></div>
+          <div class="stack-connector"><span></span><span></span><span></span></div>
+          <div class="stack-card"><span class="stack-symbol stack-purple">◇</span><div><b>Núcleo inteligente</b><small>Identidade, memória e orquestração</small></div><span class="stack-badge">CORE</span></div>
+          <div class="stack-connector"><span></span><span></span><span></span></div>
+          <div class="stack-card stack-integrations"><span class="stack-symbol stack-cyan">⌘</span><div><b>Modelos & integrações</b><small>Ollama · ferramentas · Open WebUI opcional</small></div><span class="stack-badge">CAMADA</span></div>
+          <p class="stack-footnote">Open WebUI pode apoiar integrações. Não é a identidade visual nem a interface principal da Noite.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="final-cta shell" id="comece">
+      <div class="cta-orb" aria-hidden="true"></div>
+      <div class="section-kicker">05 / O PRÓXIMO PASSO</div>
+      <h2>Conheça a próxima<br>forma de <span class="gradient-text">trabalhar.</span></h2>
+      <p>A Noite 2.0 está em desenvolvimento. Acompanhe o projeto, veja a evolução e participe da construção.</p>
+      <a class="button button-primary" href="https://github.com/Ninja7z/Noite-2.0" target="_blank" rel="noreferrer">Acompanhar no GitHub <span aria-hidden="true">↗</span></a>
+      <div class="cta-meta"><span>WINDOWS 10 / 11</span><i></i><span>OLLAMA LOCAL</span><i></i><span>PROJETO EM EVOLUÇÃO</span></div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="shell footer-inner">
+      <a class="brand footer-brand" href="#top"><span class="brand-mark" aria-hidden="true"><span></span><span></span></span><span>noite<span class="brand-version">.2</span></span></a>
+      <span>Uma presença inteligente para o seu desktop.</span>
+      <div><a href="https://github.com/Ninja7z/Noite-2.0" target="_blank" rel="noreferrer">GitHub ↗</a><span>© 2026 Noite 2.0</span></div>
+    </div>
+  </footer>
+</body>
+</html>
