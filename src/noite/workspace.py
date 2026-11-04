@@ -90,6 +90,24 @@ def resolve_workspace_path(workspace: Path, candidate: Path) -> Path:
     path = Path(candidate)
     if not path.is_absolute():
         path = root / path
+    try:
+        relative = path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("O caminho está fora do projeto aberto.") from exc
+
+    # Validate every component before resolving: resolve() would follow a link and
+    # only report a generic "outside" error, hiding that a symlink/junction exists.
+    current = root
+    for part in relative.parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            raise ValueError("O caminho está fora do projeto aberto.")
+        current = current / part
+        is_junction = getattr(current, "is_junction", lambda: False)()
+        if current.is_symlink() or is_junction:
+            raise ValueError("Links simbólicos não são permitidos no projeto aberto.")
+
     resolved = path.resolve(strict=True)
     if not resolved.is_relative_to(root):
         raise ValueError("O caminho está fora do projeto aberto.")

@@ -19,7 +19,8 @@ gates passam; testes unitários sozinhos não bastam.
 | **8** | **Distribuição e homologação** — instalador, atualização, recuperação, regressão | instalação limpa em Windows funciona sem ambiente de desenvolvimento |
 
 Estado atual: **Fase 0** publicada (PR 001 + ADR-006) e **Fase 1 em andamento**
-(PR 002 concluído: terminal + MCP no caminho único; PR 003 e 004 pendentes).
+(PR 002 e 003 concluídos: terminal + MCP no caminho único, caminho e auditoria
+unificados; PR 004 e 005 pendentes).
 Fase 1 continua bloqueante para qualquer ferramenta nova.
 
 ## Mapa das dívidas → fases
@@ -27,9 +28,9 @@ Fase 1 continua bloqueante para qualquer ferramenta nova.
 | Dívida (de `SYSTEM_ARCHITECTURE.md`) | Fase |
 |---|---|
 | D1 `ToolGuard` cobre 1 ponto | 1 |
-| D2 dois validadores de caminho | 1 |
-| D3 permissão paralela no orquestrador | 1 |
-| D5 auditoria por subquery | 1 |
+| D2 dois validadores de caminho | 1 — fechada no PR 003 |
+| D3 permissão paralela no orquestrador | 1 — fechada no PR 003 |
+| D5 auditoria por subquery | 1 — fechada no PR 003 |
 | D7 redação privada compartilhada | 1 (limpeza) |
 | D4 IDE só no legado | 5 (com decisão em `UI_ARCHITECTURE.md`) |
 | D6 terminal Windows-only | 4 (com D6 como requisito de CI) |
@@ -43,8 +44,8 @@ documentação com comportamento.
 |---|---|---|---|
 | 001 | Consolidar visão e arquitetura oficial (**este**) | 0 | — |
 | 002 | Centralizar autorização no `ToolGuard` (fechar D1) | 1 | 001 |
-| 003 | Corrigir validação de caminhos e remover permissão paralela (D2, D3) | 1 | 002 |
-| 004 | Auditoria íntegra: resultado por `id`, poda de aprovações (D5, D7) | 1 | 002 |
+| 003 | Caminhos, permissões e auditoria: validador único, sem permissão paralela, resultado por tentativa (D2, D3, D5) | 1 | 002 |
+| 004 | Endurecer testes de segurança e regressão (D7, caminhos, FTS, Windows-only) | 1 | 003 |
 | 005 | CI e testes de segurança (inclui Windows-only e extra `openwebui`) | 1 | 002-004 |
 | 006 | Escrita controlada com diff, aprovação e undo (Fase 4 mínimo) | 4 | 002-005 |
 | 007 | Consolidar núcleo conversacional e memória (Fases 2-3) | 2-3 | 005 |

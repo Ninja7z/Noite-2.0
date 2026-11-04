@@ -9,7 +9,6 @@ from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import StrEnum
 from typing import Literal
 
 from .activity import ActivityEvent, ActivityState, make_activity_event
@@ -366,20 +365,3 @@ class Orchestrator:
             f"{len(plan.agents)} subagentes concluídos",
         )
         return consolidated
-
-
-# --- Funções de máquina e permissões ---
-
-
-class PermissionLevel(StrEnum):
-    FULL = "full"
-    REGULAR = "regular"
-    NONE = "none"
-
-
-def check_permission(
-    requested: PermissionLevel, current: PermissionLevel = PermissionLevel.NONE
-) -> bool:
-    """Verifica se uma permissão é atendida baseado no nível atual."""
-    order = [PermissionLevel.NONE, PermissionLevel.REGULAR, PermissionLevel.FULL]
-    return order.index(current) >= order.index(requested)

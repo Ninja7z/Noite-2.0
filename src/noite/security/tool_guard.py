@@ -35,7 +35,7 @@ class ToolGuard:
         approval_token: str | None = None,
     ) -> Any:
         decision = self.policy.authorize(request, approval_token, self.approvals)
-        self.audit.record(request, decision)
+        audit_id = self.audit.record(request, decision)
         if decision.decision != DecisionKind.ALLOW:
             raise ToolDenied(decision.reason)
 
@@ -54,22 +54,24 @@ class ToolGuard:
             result = executor(**request.arguments)
         except Exception as exc:
             self.audit.record_execution_result(
-                request, succeeded=False, error_type=type(exc).__name__
+                request, succeeded=False, error_type=type(exc).__name__, audit_id=audit_id
             )
             raise
 
         if inspect.isawaitable(result):
-            return self._await_and_record(result, request)
-        self.audit.record_execution_result(request, succeeded=True)
+            return self._await_and_record(result, request, audit_id)
+        self.audit.record_execution_result(request, succeeded=True, audit_id=audit_id)
         return result
 
-    async def _await_and_record(self, result: Any, request: ActionRequest) -> Any:
+    async def _await_and_record(
+        self, result: Any, request: ActionRequest, audit_id: int | None = None
+    ) -> Any:
         try:
             value = await result
         except Exception as exc:
             self.audit.record_execution_result(
-                request, succeeded=False, error_type=type(exc).__name__
+                request, succeeded=False, error_type=type(exc).__name__, audit_id=audit_id
             )
             raise
-        self.audit.record_execution_result(request, succeeded=True)
+        self.audit.record_execution_result(request, succeeded=True, audit_id=audit_id)
         return value

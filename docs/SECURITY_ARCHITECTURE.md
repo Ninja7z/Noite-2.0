@@ -92,6 +92,10 @@ O que **não** está completo é a cobertura: o `ToolGuard` é instanciado em
 | Abrir mascote | `subprocess.Popen` | não | `integrations/openwebui/noite_api.py:131` |
 | Alteração de permissões | arquivo JSON | não se aplica (fluxo de configuração) | `security/permission_manager.py` |
 
+Garantias adicionais desde o PR 003: caminho validado por componente nos dois
+validadores (symlink/junction), resultado de execução auditado por `id` da
+tentativa (retry não confunde linhas) e aprovações expiradas podadas.
+
 Capacidades declaradas em `Capability` (files.read/write/delete, terminal,
 applications, network, mcp): hoje **apenas `mcp.call` é avaliada na prática**.
 As demais existem no modelo de política, mas os executores correspondentes não
@@ -137,8 +141,8 @@ prometer "undo" ao usuário.
 ## Proteções exigidas antes de ampliar autonomia
 
 1. **Path security** — um único validador: traversal, symlink e junction
-   rejeitados, caminho sempre contido na raiz autorizada (dívida D2 de
-   `SYSTEM_ARCHITECTURE.md`).
+   rejeitados, caminho sempre contido na raiz autorizada (`workspace.py` e
+   `security/path_guard.py` seguem a mesma regra desde o PR 003).
 2. **Execution security** — processo, argumentos, diretório, tempo e volume de
    saída limitados.
 3. **Approval security** — aprovação vinculada a ação + parâmetros + fingerprint,

@@ -434,3 +434,16 @@ def test_create_file_and_directory_without_overwriting(tmp_path):
 def test_reject_invalid_or_sensitive_new_item_names(tmp_path, name):
     with pytest.raises(ValueError):
         create_workspace_file(tmp_path, name)
+
+
+def test_rejects_symlinked_file_inside_workspace(tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_text("conteudo", encoding="utf-8")
+    link = tmp_path / "atalho.txt"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlinks unavailable")
+
+    with pytest.raises(ValueError, match="Links simbólicos"):
+        read_workspace_text(tmp_path, link)

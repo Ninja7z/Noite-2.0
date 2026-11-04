@@ -10,6 +10,20 @@ from .models import Capability, PermissionProfile
 # Single source of truth for the read/write-only profile used by the core and the UI.
 RESTRICTED_CAPABILITIES = frozenset({Capability.FILE_READ, Capability.FILE_WRITE})
 
+# Profile ordering from least to most permissive; the only place that defines it.
+PROFILE_ORDER: tuple[PermissionProfile, ...] = (
+    PermissionProfile.NONE,
+    PermissionProfile.RESTRICTED,
+    PermissionProfile.FULL,
+)
+
+
+def profile_allows(
+    requested: PermissionProfile, current: PermissionProfile = PermissionProfile.NONE
+) -> bool:
+    """True when `current` already grants at least the `requested` profile level."""
+    return PROFILE_ORDER.index(current) >= PROFILE_ORDER.index(requested)
+
 
 class PermissionManager:
     """User-owned permission state. LLM-facing code must never receive this object."""
