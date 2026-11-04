@@ -131,3 +131,18 @@ def test_rejects_corrupt_pdf_without_installing_dependencies(tmp_path):
     path.write_bytes(b"%PDF-1.4\ncorrupt")
     with pytest.raises(AttachmentError, match="PDF não pôde ser aberto"):
         extract_attachment(path)
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16"])
+def test_docx_with_dtd_or_entities_is_rejected(tmp_path, encoding):
+    xml = (
+        '<?xml version="1.0"?><!DOCTYPE d [<!ENTITY x SYSTEM "file:///etc/passwd">]>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p><w:r><w:t>&x;</w:t></w:r></w:p></w:body></w:document>"
+    ).encode(encoding)
+    path = tmp_path / "evil.docx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("word/document.xml", xml)
+
+    with pytest.raises(AttachmentError):
+        extract_attachment(path)

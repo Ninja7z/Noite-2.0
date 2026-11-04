@@ -14,6 +14,8 @@ from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
 
+from .workspace import _is_sensitive
+
 MAX_OUTPUT_BYTES = 200_000
 DEFAULT_TIMEOUT_SECONDS = 120
 _SAFE_COMMANDS = {
@@ -157,6 +159,8 @@ def _workspace_path(token: str, cwd: Path) -> Path:
         candidate.relative_to(cwd)
     except ValueError as exc:
         raise TerminalCommandError("O caminho precisa permanecer dentro do workspace.") from exc
+    if _is_sensitive(candidate):
+        raise TerminalCommandError("O modo seguro não lê arquivos de credenciais ou chaves.")
     return candidate
 
 

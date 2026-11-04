@@ -90,3 +90,70 @@ def test_noite_ask_rejects_empty_or_oversized_prompt():
         asyncio.run(mcp_server.noite_ask("   "))
     with pytest.raises(ValueError, match="excede o limite"):
         asyncio.run(mcp_server.noite_ask("x" * (mcp_server.MAX_PROMPT_CHARS + 1)))
+
+
+def _call_asgi(app, headers):
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {"type": "http", "method": "POST", "path": "/mcp", "headers": headers}
+    asyncio.run(app(scope, receive, send))
+    return sent
+
+
+def _auth_app():
+    calls = []
+
+    async def inner(scope, receive, send):
+        calls.append(scope["path"])
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    return mcp_server.BearerAuthMiddleware(inner, "t" * 32), calls
+
+
+def test_mcp_http_rejects_missing_or_wrong_token():
+    app, calls = _auth_app()
+    assert _call_asgi(app, [])[0]["status"] == 401
+    wrong = [(b"authorization", b"Bearer " + b"x" * 32)]
+    assert _call_asgi(app, wrong)[0]["status"] == 401
+    assert calls == []
+
+
+def test_mcp_http_accepts_valid_token_and_loopback_origin():
+    app, calls = _auth_app()
+    headers = [
+        (b"authorization", b"Bearer " + b"t" * 32),
+        (b"origin", b"http://localhost:3000"),
+    ]
+    assert _call_asgi(app, headers)[0]["status"] == 200
+    assert calls == ["/mcp"]
+
+
+def test_mcp_http_rejects_foreign_origin_even_with_valid_token():
+    app, calls = _auth_app()
+    headers = [
+        (b"authorization", b"Bearer " + b"t" * 32),
+        (b"origin", b"https://evil.example"),
+    ]
+    assert _call_asgi(app, headers)[0]["status"] == 403
+    assert calls == []
+
+
+def test_mcp_bind_host_refuses_non_loopback(monkeypatch):
+    monkeypatch.setenv("NOITE_MCP_HOST", "0.0.0.0")
+    with pytest.raises(ValueError, match="127.0.0.1"):
+        mcp_server._bind_host()
+    monkeypatch.setenv("NOITE_MCP_HOST", "localhost")
+    assert mcp_server._bind_host() == "localhost"
+
+
+def test_mcp_main_requires_strong_token(monkeypatch):
+    monkeypatch.setenv("NOITE_MCP_TOKEN", "curto")
+    with pytest.raises(SystemExit, match="NOITE_MCP_TOKEN"):
+        mcp_server.main()

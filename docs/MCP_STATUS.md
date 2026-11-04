@@ -8,6 +8,7 @@ Atualizado em 2026-11-02.
 - O código instalado utiliza MCP HTTP Streamable; não inicia servidores STDIO por `command/args`.
 - Roblox Studio mantém o transporte STDIO nativo, publicado pelo `mcp-proxy 0.13.3` em `127.0.0.1:8766`.
 - O servidor MCP da Noite é publicado em `127.0.0.1:8767/mcp`.
+- **Autenticação (2026-11-04):** o servidor exige `NOITE_MCP_TOKEN` (mín. 24 caracteres) e só aceita `Authorization: Bearer <token>`; `NOITE_MCP_HOST` só aceita loopback e requisições com `Origin` não-loopback são recusadas. Inicie com `python -m noite.mcp_server` e configure o mesmo token como Bearer na conexão `noite_2_0` do Open WebUI (a conexão atual vai falhar com 401 até isso ser feito).
 - As conexões cadastradas no Open WebUI usam os IDs `roblox_studio` e `noite_2_0`.
 - A regra antiga de não integrar com Open WebUI foi arquivada em `docs/archive/AGENTS-legacy-20261102.md`. A diretriz atual permite manter Open WebUI como integração externa, sem tratá-lo como referência visual da interface principal.
 

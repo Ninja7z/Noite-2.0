@@ -81,9 +81,17 @@ def select_relevant_text(text: str, query: str, *, max_chars: int) -> str:
     return header + content
 
 
+def _parse_xml(data: bytes) -> ElementTree.Element:
+    """Office Open XML não usa DTD; recusar DOCTYPE/ENTITY bloqueia XXE e entity-bomb."""
+    prefix = data[:65536].lower().replace(b"\x00", b"")  # cobre UTF-16
+    if b"<!doctype" in prefix or b"<!entity" in prefix:
+        raise ElementTree.ParseError("XML com DTD/entidade recusado.")
+    return ElementTree.fromstring(data)
+
+
 def _docx_text(data: bytes) -> str:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        xml = ElementTree.fromstring(_read_zip_member(archive, "word/document.xml"))
+        xml = _parse_xml(_read_zip_member(archive, "word/document.xml"))
     return "\n".join(
         "".join(node.text or "" for node in paragraph.iter() if node.tag.endswith("}t"))
         for paragraph in xml.iter()
@@ -95,7 +103,7 @@ def _xlsx_text(data: bytes) -> tuple[str, bool]:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         shared = []
         if "xl/sharedStrings.xml" in archive.namelist():
-            shared_xml = ElementTree.fromstring(
+            shared_xml = _parse_xml(
                 _read_zip_member(archive, "xl/sharedStrings.xml")
             )
             shared = ["".join(node.text or "" for node in item.iter() if node.tag.endswith("}t"))
@@ -106,7 +114,7 @@ def _xlsx_text(data: bytes) -> tuple[str, bool]:
         )
         rows = []
         for sheet in sheets[:20]:
-            root = ElementTree.fromstring(_read_zip_member(archive, sheet))
+            root = _parse_xml(_read_zip_member(archive, sheet))
             for row in root.iter():
                 if not row.tag.endswith("}row"):
                     continue
@@ -131,7 +139,7 @@ def _pptx_text(data: bytes) -> tuple[str, bool]:
         )
         extracted = []
         for slide in slides[:100]:
-            root = ElementTree.fromstring(_read_zip_member(archive, slide))
+            root = _parse_xml(_read_zip_member(archive, slide))
             extracted.append(" ".join(node.text or "" for node in root.iter()
                                       if node.tag.endswith("}t")))
         return "\n".join(extracted), len(slides) > 100

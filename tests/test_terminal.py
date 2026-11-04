@@ -101,3 +101,15 @@ def test_terminal_output_is_capped_and_nonzero_exit_is_returned(tmp_path):
 
     nonzero = run_terminal_command("exit 7", tmp_path, advanced=True)
     assert nonzero.exit_code == 7
+
+
+def test_safe_mode_refuses_credential_files_and_encoded_command(tmp_path):
+    (tmp_path / ".env").write_text("TOKEN=abc", encoding="utf-8")
+    (tmp_path / "ok.txt").write_text("x", encoding="utf-8")
+    for command in ("Get-Content .env", "Select-String abc .env"):
+        with pytest.raises(TerminalCommandError):
+            validate_terminal_command(command, cwd=tmp_path)
+    for command in ("powershell -EncodedCommand AAAA", "Get-Content -Path ok.txt"):
+        with pytest.raises(TerminalCommandError):
+            validate_terminal_command(command, cwd=tmp_path)
+    assert validate_terminal_command("Get-Content ok.txt", cwd=tmp_path) == "Get-Content ok.txt"
