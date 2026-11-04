@@ -1,0 +1,2225 @@
+import sounddevice as sd
+import queue
+import json
+import asyncio
+import edge_tts
+import os
+import time
+import re
+import traceback
+from playsound import playsound
+from vosk import Model, KaldiRecognizer
+from orchestrator import Orchestrator
+
+def safe_call(func, *args, fallback=None, **kwargs):
+   try:
+      return func(*args, **kwargs)
+   except Exception as e:
+      print(f"[Erro em {func.__name__}]: {e}")
+      return fallback
+
+try:
+   orq = Orchestrator()
+   print("[OK] Orchestrator carregado")
+
+except Exception as e:
+   print(f"[ERRO] Orchestrator: {e}")
+   orq = None
+
+SAMPLE_RATE = 16000
+PALAVRAS_ATIVACAO = ["mote", "moite", "noite", "monte", "note", "ativar",
+
+                 "boa noite", "olá note", "ei note", "oi note"]
+
+try:
+   modelo = Model("model")
+   recognizer = KaldiRecognizer(modelo, SAMPLE_RATE)
+   print("[OK] Modelo Vosk carregado")
+
+except Exception as e:
+   print(f"[ERRO] Modelo Vosk: {e}")
+   exit(1)
+
+q = queue.Queue()
+
+def callback(indata, frames, time, status):
+   try:
+      q.put(bytes(indata))
+   except Exception:
+      pass
+
+async def _gerar_audio(texto, nome_arquivo):
+   try:
+      comunicador = edge_tts.Communicate(texto, voice="pt-BR-AntonioNeural")
+      await comunicador.save(nome_arquivo)
+      return True
+   except Exception as e:
+print(f"[Erro TTS]: {e}")
+return False
+
+def falar(texto):                                                          fallback=False)
+   if not texto or not texto.strip():
+      return
+   print(f"Note: {texto}")
+   try:
+      nome_arquivo = f"temp/resposta_{int(time.time() * 1000)}.mp3"
+      os.makedirs("temp", exist_ok=True)
+      sucesso = safe_call(asyncio.run, _gerar_audio(texto, nome_arquivo),
+      if not sucesso:
+          return
+      if os.path.exists(nome_arquivo):
+          try:
+             playsound(nome_arquivo)
+          except Exception as e:
+             print(f"[Erro playsound]: {e}")
+   except Exception as e:
+      print(f"[Erro falar]: {e}")
+   finally:
+      try:
+          if 'nome_arquivo' in locals() and os.path.exists(nome_arquivo):
+             os.remove(nome_arquivo)
+      except Exception:
+          pass
+
+def corrigir_palavra(palavra):
+   """Corrige UMA palavra baseado em padrões fonéticos"""
+   if not palavra:
+      return palavra
+
+   p = palavra.strip(".,!?;:")
+   p_lower = p.lower()
+
+   # ===== VERBOS DE ABRIR =====
+   if re.match(r'^(abr|avr|abri|abriu|abril|abirr|abrí)', p_lower):
+
+      return "abra" if not p_lower.endswith(("r", "iu")) else "abrir"
+
+   # ===== PESQUISAR =====
+   if re.match(r'^(pesqui|pesquise|pesquisa|pesquis|pesquiss|peski|peskisa|pezquisa|pequisa|peskiza|puxa)',
+p_lower):
+
+      return "pesquise"
+
+   # ===== PROCURAR =====
+   if re.match(r'^(prokur|procure|procura|procu|prócura)', p_lower):
+
+      return "procure"
+
+   # ===== BUSCAR =====
+   if re.match(r'^(busk|busca|busque|buski|buc|búusca)', p_lower):
+
+      return "busca"
+
+   # ===== TOCAR =====
+   if re.match(r'^(tok|toca|toke|tocar|tóca)', p_lower):
+
+      return "toca"
+
+   # ===== YOUTUBE =====
+   if re.match(r'^(iutub|ioutube|youtub|youtube|yutub|yatube|ióutube|rútube|rutube|youtube)', p_lower):
+      return "youtube"
+
+   # ===== GOOGLE =====
+   if re.match(r'^(gugol|gogle|googl|gooogle|guugel|gúgou|google)', p_lower):
+
+      return "google"
+
+   # ===== LISTAR =====
+   if re.match(r'^(list|lista|liste|listar|lísta)', p_lower):
+
+      return "lista"
+
+   # ===== MOSTRAR =====
+   if re.match(r'^(mostr|mostra|moste|mostre|móstra)', p_lower):
+
+      return "mostra"
+
+   # ===== MARCAR =====
+   if re.match(r'^(marc|marca|marque|márca)', p_lower):
+
+      return "marque"
+
+   # ===== AGENDAR =====
+   if re.match(r'^(ajend|agend|agende|ajende|ajénda)', p_lower):
+
+      return "agende"
+
+   # ===== LEMBRAR =====
+   if re.match(r'^(lembr|lembre|lembra|lémbre|lemb|lémbra)', p_lower):
+
+      return "lembre"
+
+   # ===== ANOTAR =====
+   if re.match(r'^(anota|anot|anote|anóta)', p_lower):
+
+      return "anota"
+
+   # ===== GUARDAR =====
+   if re.match(r'^(guard|guarda|guarde|guárda)', p_lower):
+
+      return "guarda"
+
+   # ===== CHROMA =====
+   if re.match(r'^(crom|krom|cromo|croma|cróma)', p_lower):
+
+      return "chroma"
+
+   # ===== ARQUIVO =====
+   if re.match(r'^(arki|arqui|arquiv|arkivo|arquivo|árquivo)', p_lower):
+
+      return "arquivo"
+
+   # ===== COMPUTADOR / PC =====
+   if re.match(r'^(comput|computad|pc|piq)', p_lower):
+
+      return "computador"
+
+   # ===== WAKE WORD ERRADA =====
+   if p_lower == "noites" or p_lower == "noytes" or p_lower == "noiti":
+
+      return "noite"
+
+   return p
+
+def corrigir_texto(texto):
+   """Corrige o texto inteiro palavra por palavra"""
+   if not texto:
+      return texto
+
+   palavras = texto.split()
+   corrigidas = []
+for palavra in palavras:
+   pontuacao = ""
+   p_limpa = palavra
+   if p_limpa and p_limpa[-1] in ".,!?;:":
+      pontuacao = p_limpa[-1]
+      p_limpa = p_limpa[:-1]
+
+   corrigida = corrigir_palavra(p_limpa)
+   corrigidas.append(corrigida + pontuacao)
+
+return ' '.join(corrigidas)
+
+def limpar_query(query):
+   """Remove verbo de busca que ficou colado no início da query"""
+   return re.sub(r'^(pesquis\w*|busc\w*|procur\w*|toc\w*|most\w*)\s+', '', query,
+
+flags=re.IGNORECASE).strip()
+
+# ===== DETECÇÃO DE SITES CONHECIDOS =====
+SITES_CONHECIDOS = [
+
+   "youtube", "google", "gmail", "github", "chatgpt", "maps",
+   "facebook", "instagram", "twitter", "tiktok", "whatsapp",
+   "linkedin", "reddit", "amazon", "mercadolivre", "netflix",
+   "spotify", "twitch", "discord", "telegram", "drive"
+]
+
+APPS_CONHECIDOS = [
+   "chrome", "firefox", "edge", "explorer", "calculadora",
+   "notepad", "word", "excel", "powerpoint", "outlook",
+   "vscode", "visual studio", "pycharm", "terminal", "cmd"
+
+]
+
+def parece_site_ou_app(texto):                conhecido"""
+   """Verifica se o texto contém um site/app
+   texto_lower = texto.lower()
+   for site in SITES_CONHECIDOS:
+      if site in texto_lower:
+          return "site", site
+   for app in APPS_CONHECIDOS:
+      if app in texto_lower:
+          return "app", app
+   return None, None
+
+def extrair_comando(texto):
+   """Remove a wake word e retorna o resto"""
+   try:
+      texto = texto.lower().strip()
+      for palavra in PALAVRAS_ATIVACAO:
+          if palavra in texto:
+             partes = texto.split(palavra, 1)
+             return partes[1].strip() if len(partes) > 1 else ""
+      return texto
+   except Exception as e:
+      print(f"[Erro extrair_comando]: {e}")
+      return ""
+def detectar_acao_rapida(comando):
+   """Detecta ação sem chamar o llama"""
+   if not comando:
+      return None
+
+   try:
+      cmd = comando.lower().strip()
+      # Remove palavras de preenchimento
+      cmd = re.sub(r'\b(por favor|pra mim|ai|ái|pfv)\b', '', cmd).strip()
+
+      # ===== PRÉ-PROCESSAMENTO: detectar intenção de PESQUISA COM SITE =====
+      # "pesquise X no youtube", "pesquise por X no youtube", "X no youtube"
+      match = re.search(r'(?:pesquise|pesquisa|pesquisar|procure|procura|busca|busque|toca|tocar|me
+mostra)\s+(?:por|sobre)?\s*(.+?)\s+no\s+(youtube|google)\b', cmd)
+      if match:
+
+          query = match.group(1).strip()
+          site = match.group(2).strip()
+          query = re.sub(r'\s+(pra mim|por favor|ai|ái)$', '', query).strip()
+          query = limpar_query(query)
+          if query and site in ["youtube", "google"]:
+
+             return {"acao": "pesquisar", "site": site, "query": query}
+
+      # "no youtube pesquise X", "no youtube X", "youtube pesquise X"
+      match =
+re.search(r'no\s+(youtube|google)\s+(?:pesquise|pesquisa|pesquisar|procure|procura|busca|busque|toca)?\s
+*(?:por|sobre)?\s*(.+)', cmd)
+      if match:
+
+          site = match.group(1).strip()
+          query = match.group(2).strip()
+          query = re.sub(r'\s+(pra mim|por favor|ai|ái)$', '', query).strip()
+          query = limpar_query(query)
+          if query:
+
+             return {"acao": "pesquisar", "site": site, "query": query}
+
+      # "youtube pesquise X" ou "youtube X"
+      match =
+re.search(r'(youtube|google)\s+(?:pesquise|pesquisa|pesquisar|procure|procura|busca|busque|toca|me
+mostra)?\s*(?:por|sobre)?\s*(.+)', cmd)
+      if match:
+
+          site = match.group(1).strip()
+          query = match.group(2).strip()
+          query = re.sub(r'\s+(pra mim|por favor|ai|ái)$', '', query).strip()
+          query = limpar_query(query)
+          if query:
+
+             return {"acao": "pesquisar", "site": site, "query": query}
+
+      # ===== PESQUISAR LOCAL (PC) =====
+      match =
+re.search(r'\b(pesquise|pesquisa|busca|procura)\s+(?:nos\s+|no\s+)?(?:meus\s+)?(?:arquivos?|pc|computad
+or)\s+(.+)', cmd)
+      if match:
+
+          query = match.group(2).strip()
+          query = limpar_query(query)
+          if query:
+
+             return {"acao": "pesquisar", "site": "local", "query": query}
+
+      # ===== ABRIR ARQUIVO ESPECÍFICO (com extensão) =====
+      match = re.search(r'\b(abre|abrir|abre o)\s+(?:o\s+)?(?:arquivo\s+)?([\w\-./\\]+\.\w+)', cmd)
+      if match:
+          caminho = match.group(2).strip()
+          if '/' in caminho or '\\' in caminho or caminho.endswith(('.py', '.txt', '.md', '.json', '.csv', '.pdf', '.docx',
+'.xlsx', '.html', '.js', '.css', '.ipynb')):
+
+             return {"acao": "abrir_arquivo", "caminho": caminho}
+
+      # ===== ABRIR SITE/APP (genérico) =====
+      match = re.search(r'\b(abra|abre|abrir|vai no|entra no|abre o|abre ai|abre
+aí)\s+(?:o|a|os|as|em|no|na)?\s*(.+)', cmd)
+      if match:
+
+          alvo = match.group(2).strip()
+          alvo = re.sub(r'^(e|ou|de)\s+', '', alvo).strip()
+          alvo = re.sub(r'\s+(pra mim|por favor|ai|ái)$', '', alvo).strip()
+          if alvo and len(alvo) > 1:
+
+             tipo, _ = parece_site_ou_app(alvo)
+             if tipo:
+
+                return {"acao": "abrir", "alvo": alvo}
+             if not re.search(r'\b(pesquise|pesquisa|busca|procura|toca)\b', alvo):
+
+                return {"acao": "abrir", "alvo": alvo}
+
+      # ===== PESQUISAR padrão (google) =====
+      match =
+re.search(r'\b(pesquise|pesquisa|pesquisar|procure|procura|busca|busque)\s+(?:por|sobre)?\s*(.+)', cmd)
+      if match:
+
+          query = match.group(2).strip()
+          query = re.sub(r'\s+(pra mim|por favor|ai|ái|no youtube|no google)$', '', query).strip()
+          query = limpar_query(query)
+          if query and not query.startswith("arquivo"):
+
+             return {"acao": "pesquisar", "site": "google", "query": query}
+
+      # ===== BUSCAR ARQUIVO =====
+      match = re.search(r'\b(busca|procure|procura|encontra|acha)\s+(?:arquivo\s+)?(?:sobre|de|com|que
+tenha|com tema|sobre)\s+(.+)', cmd)
+      if match:
+
+          query = match.group(2).strip()
+          if query:
+
+             return {"acao": "buscar_arquivo", "query": query}
+
+      # ===== LISTAR ARQUIVOS =====
+      match = re.search(r'\b(lista|mostra|liste|mostre)\s+(?:os\s+)?(?:arquivos|pastas|arquivos da
+pasta|arquivos do)(?:\s+(.+))?', cmd)
+      if match:
+
+          resto = (match.group(2) or "").strip()
+          caminho = "."
+          extensao = None
+          caminho_match = re.search(r'(?:da pasta|de|do|em)\s+([\w/\\]+)', resto)
+          if caminho_match:
+
+             caminho = caminho_match.group(1).strip()
+          ext_match = re.search(r'\.(py|txt|md|json|csv|pdf|docx?|xlsx?|html|js|css)$', resto)
+          if ext_match:
+
+             extensao = "." + ext_match.group(1)
+          return {"acao": "listar_arquivos", "caminho": caminho, "extensao": extensao}
+
+      # ===== MARCAR EVENTO =====
+      match = re.search(r'\b(marque|marca|agende|agendar|anota na agenda|coloca na agenda|cria um
+evento)\s+(.+)', cmd)
+      if match:
+
+          return {"acao": "criar_evento", "descricao": match.group(2).strip(), "data_hora": "2026-06-11 20:00"}
+
+      # ===== LEMBRAR =====
+      match = re.search(r'\b(lembre|lembrar|lembra|anota|guarda|salva)\s+(.+)', cmd)
+      if match:
+          fato = match.group(2).strip()
+          permanente = any(p in cmd for p in ["para sempre", "nunca esqueça", "sempre", "permanente"])
+          return {"acao": "lembrar", "fato": fato, "permanente": permanente}
+
+      # ===== LISTAR EVENTOS =====
+      if re.search(r'\b(o que (tenho|tenho marcado|tá marcado|esta marcado)|meus eventos|minha agenda|o
+que tem marcado)\b', cmd):
+
+          return {"acao": "listar_eventos"}
+
+      # ===== REINDEXAR =====
+      if re.search(r'\b(reindexa|indexa|reindexar|indexar)\b', cmd):
+
+          return {"acao": "reindexar"}
+
+      return None
+   except Exception as e:
+
+      print(f"[Erro detectar_acao]: {e}")
+      return None
+
+def eh_comando_direto(texto):
+   """Retorna True se o texto for um comando de ação sem wake word"""
+   try:
+      if not texto:
+          return False
+      return detectar_acao_rapida(texto) is not None
+   except Exception as e:
+      print(f"[Erro eh_comando_direto]: {e}")
+      return False
+
+def processar(comando_voz):
+   """Processa o comando"""
+   if orq is None:
+      falar("Erro: orchestrator não está disponível.")
+      return
+
+try:
+   comando = extrair_comando(comando_voz)
+   if not comando:
+      falar("Diga o comando.")
+      return
+
+print(f"[Comando]: {comando}")
+
+acao = detectar_acao_rapida(comando)
+
+if acao:                                                ensure_ascii=False))
+   print(f"[Ação detectada]: {acao}")
+   try:
+      resposta, _ = orq._tentar_acao(json.dumps(acao,
+      if resposta:
+          falar(resposta)
+      else:
+          falar(f"Feito: {acao.get('acao', 'ação')}")
+   except Exception as e:
+      print(f"[Erro ao executar]: {e}")
+      falar(f"Erro: {e}")
+
+else:
+   try:
+          resposta = orq.processar(comando)
+          if resposta:
+
+             falar(resposta)
+          else:
+
+             falar("Não entendi.")
+      except Exception as e:
+
+          print(f"[Erro llama]: {e}")
+          falar(f"Erro: {e}")
+except Exception as e:
+   print(f"[Erro geral]: {e}")
+   traceback.print_exc()
+
+def main_loop():                                                          dtype='int16',
+   """Loop principal"""
+   print("\nNote ouvindo... Diga 'Noite' + comando.")
+   print("(Pressione Ctrl+C para encerrar)\n")
+   try:
+      with sd.RawInputStream(samplerate=SAMPLE_RATE, blocksize=8000,
+                          channels=1, callback=callback):
+          while True:
+             try:
+                data = q.get(timeout=1)
+                if recognizer.AcceptWaveform(data):
+                    try:
+                       resultado = json.loads(recognizer.Result())
+                       texto = resultado.get("text", "").strip().lower()
+
+if not texto:
+   continue
+
+texto_original = texto
+texto = corrigir_texto(texto)
+
+if texto != texto_original:
+   print(f"Ouvido (original): {texto_original}")
+   print(f"Corrigido: {texto}")
+
+else:
+   print(f"Ouvido: {texto}")
+
+tem_wake = any(p in texto for p in PALAVRAS_ATIVACAO)
+eh_direto = eh_comando_direto(texto)
+
+                    if tem_wake or eh_direto:           wake  word]")
+                       if not tem_wake and eh_direto:
+                          print(f"[Comando direto, sem
+                       processar(texto)
+
+                except json.JSONDecodeError:
+                    pass
+
+                except Exception as e:
+                    print(f"[Erro ao processar]: {e}")
+
+          except queue.Empty:
+             pass
+
+          except KeyboardInterrupt:
+             raise
+
+          except Exception as e:
+             print(f"[Erro no loop]: {e}")
+             time.sleep(0.1)
+
+except KeyboardInterrupt:
+   print("\nEncerrando...")
+   except Exception as e:
+      print(f"[Erro fatal]: {e}")
+      traceback.print_exc()
+
+if __name__ == "__main__":
+   main_loop()
+
+aiohappyeyeballs==2.6.2
+aiohttp==3.14.1
+aiosignal==1.4.0
+annotated-types==0.7.0
+anyio==4.13.0
+attrs==26.1.0
+audioop-lts==0.2.2
+certifi==2026.5.20
+cffi==2.0.0
+charset-normalizer==3.4.7
+colorama==0.4.6
+comtypes==1.4.16
+edge-tts==7.2.8
+frozenlist==1.8.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.18
+keyboard==0.13.5
+multidict==6.7.1
+numpy==2.4.6
+ollama==0.6.2
+playsound==1.2.2
+propcache==0.5.2
+pycparser==3.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+pypiwin32==223
+pyttsx3==2.99
+pywin32==312
+requests==2.34.2
+scipy==1.17.1
+sounddevice==0.5.5
+SpeechRecognition==3.16.1
+srt==3.5.3
+standard-aifc==3.13.0
+standard-chunk==3.13.0
+tabulate==0.10.0
+tqdm==4.68.2
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+urllib3==2.7.0
+vosk==0.3.45
+websockets==16.0
+yarl==1.24.2
+
+import ollama
+import json
+import os
+import re
+import time
+import concurrent.futures
+from datetime import datetime
+from pathlib import Path
+from collections import OrderedDict
+
+from agents.system_agent import SystemAgent
+from agents.calendar_agent import CalendarAgent
+from agents.memory_agent import MemoryAgent
+from agents.filesystem_agents import FilesystemAgent
+from agents.indexer_agent import IndexerAgent
+
+def limpar_query(query):
+   """Remove verbo de busca que ficou colado no início da query"""
+   return re.sub(r'^(pesquis\w*|busc\w*|procur\w*|toc\w*|most\w*)\s+', '', query,
+
+flags=re.IGNORECASE).strip()
+
+class Orchestrator:
+
+ 📂 def __init__(self):
+      # Diretórios base
+      self.base_dir = Path(__file__).parent.resolve()
+      self.venv_dir = self.base_dir / ".venv"
+  ⚙️# Configurações
+      settings_path = self.base_dir / "config" / "settings.json"
+      try:
+          with open(settings_path, "r", encoding="utf-8") as f:
+             self.settings = json.load(f)
+      except Exception as e:
+          print(f"[SETTINGS] Erro ao carregar settings.json: {e}")
+          self.settings = {}
+
+      self.debug = self.settings.get("debug", False)
+      self.modelo_llm = self.settings.get("modelo", "llama3.2")
+
+  📝# Carregar prompt uma única vez
+
+      prompt_path = self.base_dir / "config" / "prompt.txt"
+      try:
+
+          with open(prompt_path, "r", encoding="utf-8") as f:
+             self.prompt_base = f.read()
+
+      except Exception as e:
+          print(f"[PROMPT] Erro ao carregar prompt: {e}")
+          self.prompt_base = "Você é uma assistente virtual útil."
+
+  📝# Sistema de Logs
+
+      self.log_ativo = self.settings.get("logs", {}).get("ativo", True)
+      self.log_file = self.base_dir / "data" / "logs.log"
+      self.log_file.parent.mkdir(parents=True, exist_ok=True)
+
+  🤖# Inicialização dos Agentes
+
+      self.system_agent = SystemAgent()
+      self.calendar_agent = CalendarAgent()
+      self.memory_agent = MemoryAgent()
+      self.filesystem_agent = FilesystemAgent(self.base_dir)
+      self.indexer_agent = IndexerAgent(self.base_dir)
+
+  📜# Histórico e Cache
+
+      self.historico = []
+      self.cache_arquivos = None
+      self.cache = OrderedDict()
+      self.MAX_CACHE = self.settings.get("cache_max", 100)
+self.CACHE_BLOQUEADO = {
+   "listar_eventos", "pesquisar", "abrir", "reindexar",
+   "listar_arquivos", "ler_arquivo", "abrir_arquivo"
+
+}
+
+⚡# Comandos diretos integrados
+
+self.comandos_diretos = [
+   {"nome": "google", "handler": self._cmd_google},
+   {"nome": "youtube", "handler": self._cmd_youtube},
+   {"nome": "spotify", "handler": self._cmd_spotify},
+   {"nome": "steam", "handler": self._cmd_steam},
+   {"nome": "discord", "handler": self._cmd_discord},
+
+]
+
+🎯# Executores de ações
+
+self.executores_acoes = {
+   "abrir": self._acao_abrir,
+   "pesquisar": self._acao_pesquisar,
+   "criar_evento": lambda d: self.calendar_agent.criar_evento(d["descricao"], d["data_hora"]),
+   "listar_eventos": lambda d: self.calendar_agent.listar_eventos(),
+   "lembrar": lambda d: self.memory_agent.lembrar(d["fato"], d.get("permanente", False)),
+   "listar_arquivos": lambda d: self.filesystem_agent.listar(d.get("caminho", "."), d.get("extensao")),
+   "ler_arquivo": lambda d: self.filesystem_agent.ler(d["caminho"]),
+   "buscar_arquivo": self._acao_buscar_arquivo,
+   "abrir_arquivo": lambda d: self.filesystem_agent.abrir_arquivo(d["caminho"]),
+   "reindexar": lambda d: self._indexar_e_retornar()
+
+}
+
+self._verificar_indexacao_inicial()
+
+def _log(self, texto):
+   print(texto)
+   if self.log_ativo:
+      try:
+          with open(self.log_file, "a", encoding="utf-8") as f:
+             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+             f.write(f"[{timestamp}] {texto}\n")
+      except Exception:
+          pass
+
+def _verificar_indexacao_inicial(self):                                          indexados")
+   try:
+      stats = self.indexer_agent.get_stats()
+      if stats.get("total_documentos", 0) == 0:
+          self._log("[Indexador] Primeira execução - indexando...")
+          self.indexar_tudo()
+      else:
+          self._log(f"[Indexador] {stats.get('total_documentos', 0)} documentos
+   except Exception as e:
+      self._log(f"[Indexador] Erro: {e}")
+
+def _indexar_e_retornar(self):
+   self.indexar_tudo()
+   return "Arquivos reindexados."
+
+def indexar_tudo(self):
+   self._log("[Indexador] Iniciando processo de indexação...")
+   def _executar():
+      return self.indexer_agent.index_all()
+   try:
+      with concurrent.futures.ThreadPoolExecutor() as executor:
+          future = executor.submit(_executar)
+          count = future.result(timeout=15)
+      self._log(f"[Indexador] {count} arquivos indexados.")
+
+   except concurrent.futures.TimeoutError:
+      self._log("[Indexador] Tempo limite excedido. A indexação foi abortada para não travar a IA.")
+
+   except Exception as e:
+      self._log(f"[Indexador] Erro ao indexar: {e}")
+
+# --- Normalização e Extração ---
+def _normalizar_comando(self, cmd):
+
+   return cmd.lower().strip()
+
+def _extrair_termo_busca(self, cmd, plataforma):
+   cmd = cmd.replace(plataforma, "")
+   cmd = re.sub(r"\b(pesquise|pesquisa|procure|busque)\b", "", cmd)
+   cmd = re.sub(r"\b(no|na|por|o|a)\b", "", cmd)
+   return cmd.strip()
+
+# --- Handlers de Comandos Diretos ---
+def _cmd_google(self, cmd):
+
+   termo = self._extrair_termo_busca(cmd, "google")
+   if not termo:
+
+      return "O que você deseja pesquisar no Google?"
+   return self.system_agent.pesquisar("google", termo)
+
+def _cmd_youtube(self, cmd):
+   termo = self._extrair_termo_busca(cmd, "youtube")
+   if not termo:
+      return "O que você deseja pesquisar no YouTube?"
+   return self.system_agent.pesquisar("youtube", termo)
+
+def _cmd_spotify(self, cmd):
+   termo = self._extrair_termo_busca(cmd, "spotify")
+   if not termo:
+      return self.system_agent.abrir("spotify")
+   return self.system_agent.abrir(f"https://open.spotify.com/search/{termo}")
+
+def _cmd_steam(self, cmd):
+   termo = self._extrair_termo_busca(cmd, "steam")
+   if not termo:
+      return self.system_agent.abrir("steam")
+   return self.system_agent.abrir(f"steam://store/search/?term={termo}")
+
+def _cmd_discord(self, cmd):
+   return self.system_agent.abrir("discord")
+
+def _fallback_roteador(self, cmd):
+   # 1. Se tiver intenção de pesquisa junto, NÃO usa o roteador rápido
+   # (deixa pra _detectar_acao_rapida, que sabe separar site + query)
+   tem_pesquisa = re.search(r'\b(pesquise|pesquisa|pesquisar|procure|procura|busca|busque)\b', cmd)
+   if tem_pesquisa:
+      return None
+
+   # 2. Prioridade: Intenção de abrir aplicativos ou sites (sem pesquisa)
+   if cmd.startswith("abra "):
+
+      alvo = cmd[5:].strip()
+      alvo = re.sub(r'^(e|ou)\s+', '', alvo).strip()
+          if alvo:
+             return self.system_agent.abrir(alvo)
+
+      # 3. Comandos de pesquisa específicos diretos (ex: "youtube", "spotify")
+      for comando in self.comandos_diretos:
+
+          nome = comando["nome"]
+          if re.search(rf"\b{nome}\b", cmd):
+
+             return comando["handler"](cmd)
+
+      return None
+
+      # 2. Prioridade Secundária: Comandos de pesquisa específicos
+      for comando in self.comandos_diretos:
+
+          nome = comando["nome"]
+          if re.search(rf"\b{nome}\b", cmd):
+
+             return comando["handler"](cmd)
+
+      return None
+
+   # --- Detecção de Ação por Regex (intenções complexas) ---
+   def _detectar_acao_rapida(self, cmd):
+
+      """Detecta ações estruturadas (pesquisar com site, eventos, memória, arquivos) via regex"""
+      try:
+
+          cmd = re.sub(r'\b(por favor|pra mim|ai|ái|pfv)\b', '', cmd).strip()
+
+          # "pesquise X no youtube/google"
+          match = re.search(r'(?:pesquise|pesquisa|pesquisar|procure|procura|busca|busque|toca|tocar|me
+mostra)\s+(?:por|sobre)?\s*(.+?)\s+no\s+(youtube|google)\b', cmd)
+          if match:
+
+             query = match.group(1).strip()
+             site = match.group(2).strip()
+             query = re.sub(r'\s+(pra mim|por favor|ai|ái)$', '', query).strip()
+             query = limpar_query(query)
+             if query and site in ["youtube", "google"]:
+
+                return {"acao": "pesquisar", "site": site, "query": query}
+
+          # "no youtube pesquise X", "no youtube X"
+          match =
+re.search(r'no\s+(youtube|google)\s+(?:pesquise|pesquisa|pesquisar|procure|procura|busca|busque|toca)?\s
+*(?:por|sobre)?\s*(.+)', cmd)
+          if match:
+
+             site = match.group(1).strip()
+             query = match.group(2).strip()
+             query = re.sub(r'\s+(pra mim|por favor|ai|ái)$', '', query).strip()
+             query = limpar_query(query)
+             if query:
+
+                return {"acao": "pesquisar", "site": site, "query": query}
+
+          # "youtube pesquise X" ou "youtube X"
+          match =
+re.search(r'(youtube|google)\s+(?:pesquise|pesquisa|pesquisar|procure|procura|busca|busque|toca|me
+mostra)?\s*(?:por|sobre)?\s*(.+)', cmd)
+          if match:
+
+             site = match.group(1).strip()
+             query = match.group(2).strip()
+             query = re.sub(r'\s+(pra mim|por favor|ai|ái)$', '', query).strip()
+             query = limpar_query(query)
+             if query:
+
+                return {"acao": "pesquisar", "site": site, "query": query}
+          # Pesquisar local (PC)
+          match =
+re.search(r'\b(pesquise|pesquisa|busca|procura)\s+(?:nos\s+|no\s+)?(?:meus\s+)?(?:arquivos?|pc|computad
+or)\s+(.+)', cmd)
+          if match:
+
+             query = match.group(2).strip()
+             query = limpar_query(query)
+             if query:
+
+                return {"acao": "pesquisar", "site": "local", "query": query}
+
+          # Abrir arquivo específico (com extensão)
+          match = re.search(r'\b(abre|abrir|abre o)\s+(?:o\s+)?(?:arquivo\s+)?([\w\-./\\]+\.\w+)', cmd)
+          if match:
+
+             caminho = match.group(2).strip()
+             if '/' in caminho or '\\' in caminho or caminho.endswith(('.py', '.txt', '.md', '.json', '.csv', '.pdf', '.docx',
+'.xlsx', '.html', '.js', '.css', '.ipynb')):
+
+                return {"acao": "abrir_arquivo", "caminho": caminho}
+
+          # Pesquisar padrão (google)
+          match =
+re.search(r'\b(pesquise|pesquisa|pesquisar|procure|procura|busca|busque)\s+(?:por|sobre)?\s*(.+)', cmd)
+          if match:
+
+             query = match.group(2).strip()
+             query = re.sub(r'\s+(pra mim|por favor|ai|ái|no youtube|no google)$', '', query).strip()
+             query = limpar_query(query)
+             if query and not query.startswith("arquivo"):
+
+                return {"acao": "pesquisar", "site": "google", "query": query}
+
+          # Buscar arquivo
+          match = re.search(r'\b(busca|procure|procura|encontra|acha)\s+(?:arquivo\s+)?(?:sobre|de|com|que
+tenha|com tema|sobre)\s+(.+)', cmd)
+          if match:
+
+             query = match.group(2).strip()
+             if query:
+
+                return {"acao": "buscar_arquivo", "query": query}
+
+          # Listar arquivos
+          match = re.search(r'\b(lista|mostra|liste|mostre)\s+(?:os\s+)?(?:arquivos|pastas|arquivos da
+pasta|arquivos do)(?:\s+(.+))?', cmd)
+          if match:
+
+             resto = (match.group(2) or "").strip()
+             caminho = "."
+             extensao = None
+             caminho_match = re.search(r'(?:da pasta|de|do|em)\s+([\w/\\]+)', resto)
+             if caminho_match:
+
+                caminho = caminho_match.group(1).strip()
+             ext_match = re.search(r'\.(py|txt|md|json|csv|pdf|docx?|xlsx?|html|js|css)$', resto)
+             if ext_match:
+
+                extensao = "." + ext_match.group(1)
+             return {"acao": "listar_arquivos", "caminho": caminho, "extensao": extensao}
+
+          # Marcar evento
+          match = re.search(r'\b(marque|marca|agende|agendar|anota na agenda|coloca na agenda|cria um
+evento)\s+(.+)', cmd)
+          if match:
+
+             return {"acao": "criar_evento", "descricao": match.group(2).strip(), "data_hora":
+datetime.now().strftime("%Y-%m-%d %H:%M")}
+
+          # Lembrar
+          match = re.search(r'\b(lembre|lembrar|lembra|anota|guarda|salva)\s+(.+)', cmd)
+          if match:
+             fato = match.group(2).strip()
+             permanente = any(p in cmd for p in ["para sempre", "nunca esqueça", "sempre", "permanente"])
+             return {"acao": "lembrar", "fato": fato, "permanente": permanente}
+
+          # Listar eventos
+          if re.search(r'\b(o que (tenho|tenho marcado|tá marcado|esta marcado)|meus eventos|minha
+agenda|o que tem marcado)\b', cmd):
+
+             return {"acao": "listar_eventos"}
+
+          # Reindexar
+          if re.search(r'\b(reindexa|indexa|reindexar|indexar)\b', cmd):
+
+             return {"acao": "reindexar"}
+
+          return None
+      except Exception as e:
+
+          self._log(f"[ERRO _detectar_acao_rapida] {e}")
+          return None
+
+   # --- Fluxo Principal ---
+   def processar(self, comando, modo=None):
+
+      t_inicio = time.time()
+      cmd_clean = self._normalizar_comando(comando)
+
+      if not cmd_clean:
+          return "Diga alguma coisa!"
+
+      self._log(f"\n[COMANDO] {comando}")
+
+      # 1. Roteador rápido (comandos diretos simples: "abra X", nome de app, etc.)
+      resultado_direto = self._fallback_roteador(cmd_clean)
+      if resultado_direto:
+
+          self._log(f"[TEMPO] Execução Direta: {time.time() - t_inicio:.2f}s")
+          return resultado_direto
+
+      # 2. Detecção de ação por regex (pesquisar com site, eventos, memória, arquivos)
+      acao_detectada = self._detectar_acao_rapida(cmd_clean)
+      if acao_detectada:
+
+          self._log(f"[AÇÃO REGEX] {acao_detectada}")
+          handler = self.executores_acoes.get(acao_detectada.get("acao"))
+          if handler:
+
+             resultado = handler(acao_detectada)
+             self._log(f"[TEMPO] Execução Regex: {time.time() - t_inicio:.2f}s")
+             return resultado
+
+      cache_ativo = self.settings.get("cache_ativo", True)
+
+      if cache_ativo and cmd_clean in self.cache:
+          self._log(f"[CACHE HIT] Reaproveitando resposta para: '{cmd_clean}'")
+          self._log(f"[TEMPO] Resposta Cache: {time.time() - t_inicio:.2f}s")
+          return self.cache[cmd_clean]
+
+      system_prompt = self._montar_system_prompt(comando)
+      self.historico.append({"role": "user", "content": comando})
+
+      try:
+          resposta = ollama.chat(
+             model=self.modelo_llm,
+             messages=[{"role": "system", "content": system_prompt}] + self.historico
+          )
+      texto = resposta["message"]["content"].strip()
+   except Exception as e:
+
+      self._log(f"[ERRO LLM] {e}")
+      return f"Erro ao consultar o modelo: {e}"
+
+   self._log(f"[LLAMA] {texto}")
+
+   resultado_acao, acao_detectada_json = self._tentar_acao(texto)
+
+   if resultado_acao:
+      if acao_detectada_json not in ("abrir", "pesquisar", "abrir_arquivo", "reindexar"):
+          self.historico.append({"role": "assistant", "content": resultado_acao})
+
+      if cache_ativo and acao_detectada_json not in self.CACHE_BLOQUEADO:
+          self._salvar_no_cache(cmd_clean, resultado_acao)
+
+      self._limpar_historico_velho()
+      self._log(f"[TEMPO] Total (Ação): {time.time() - t_inicio:.2f}s")
+      return resultado_acao
+
+   self.historico.append({"role": "assistant", "content": texto})
+   if cache_ativo:
+
+      self._salvar_no_cache(cmd_clean, texto)
+   self._limpar_historico_velho()
+
+   self._log(f"[TEMPO] Total (Conversa): {time.time() - t_inicio:.2f}s")
+   return texto
+
+def _salvar_no_cache(self, chave, valor):
+   if chave in self.cache:
+      self.cache.move_to_end(chave)
+   self.cache[chave] = valor
+   if len(self.cache) > self.MAX_CACHE:
+      self.cache.popitem(last=False)
+
+def _limpar_historico_velho(self):
+   limite = self.settings.get("historico_max", 20)
+   if len(self.historico) > limite:
+      self.historico = self.historico[-limite:]
+
+def _montar_system_prompt(self, comando):
+   base = self.prompt_base
+   hoje = datetime.now().strftime("%Y-%m-%d (%A)")
+   fatos = self.memory_agent.buscar_relevantes(comando)
+
+   contexto_arquivos = ""
+   try:
+
+      docs_relevantes = self.indexer_agent.buscar(comando, n_results=3)
+      if docs_relevantes:
+
+          contexto_arquivos = "\n\nArquivos relevantes encontrados:\n"
+          for doc in docs_relevantes:
+
+             contexto_arquivos += f"- {doc.get('caminho', '?')}: {doc.get('preview', '')[:100]}\n"
+   except Exception:
+
+      pass
+
+   extra = f"\n\nHoje é {hoje}."
+   if fatos:
+
+      extra += f"\n\nMemórias: {fatos}"
+   if contexto_arquivos:
+
+      extra += contexto_arquivos
+      return base + extra
+
+   # --- Executores de Ações ---
+   def _acao_abrir(self, dados):
+
+      alvo = dados["alvo"]
+      if self.filesystem_agent.existe(alvo):
+
+          return self.filesystem_agent.abrir_arquivo(alvo)
+      return self.system_agent.abrir(alvo)
+
+   def _acao_pesquisar(self, dados):
+      site = dados["site"]
+      query = dados["query"]
+      if site in ("local", "arquivos", "pc"):
+          resultados = self.indexer_agent.buscar(query, n_results=10)
+          return self.filesystem_agent.formatar_resultados(query, resultados)
+      return self.system_agent.pesquisar(site, query)
+
+   def _acao_buscar_arquivo(self, dados):
+      resultados = self.indexer_agent.buscar(dados["query"], n_results=10)
+      return self.filesystem_agent.formatar_resultados(dados["query"], resultados)
+
+   def _tentar_acao(self, texto):
+      try:
+          limpo = texto.replace("```json", "").replace("```", "").strip()
+          inicio = limpo.find("{")
+          fim = limpo.rfind("}")
+
+          if inicio == -1 or fim == -1:
+             return None, None
+
+          json_texto = limpo[inicio:fim+1]
+          dados = json.loads(json_texto)
+          acao = dados.get("acao")
+
+          if not acao:
+             return None, None
+
+          self._log(f"[AÇÃO] Executando: {acao} -> {dados}")
+
+          handler = self.executores_acoes.get(acao)
+          if handler:
+
+             return handler(dados), acao
+
+      except Exception as e:
+          self._log(f"[ERRO AÇÃO] Falha ao processar comando estruturado: {e}")
+          return f"Erro na execução da ação: {e}", None
+
+      return None, None
+import json
+import os
+from agents.memory_agent import MemoryAgent
+
+agente = MemoryAgent()
+
+arquivos = [
+   ("data/memoria_permanente.json", True),
+   ("data/memoria_temp.json", False),
+
+]
+
+total = 0
+for arquivo, permanente in arquivos:
+   if os.path.exists(arquivo):
+      with open(arquivo, "r", encoding="utf-8") as f:
+          fatos = json.load(f)
+      for fato in fatos:
+          agente.lembrar(fato, permanente)
+          print(f"Migrado: {fato}")
+          total += 1
+
+print(f"\nMigração concluída! {total} fato(s) migrado(s).")
+from orchestrator import Orchestrator
+
+orq = Orchestrator()
+
+print("Note iniciado. Digite 'sair' para encerrar.\n")
+
+while True:
+   comando = input("Você: ")
+   if comando.lower() == "sair":
+      break
+   resposta = orq.processar(comando)
+   print(f"Note: {resposta}\n")
+
+import tkinter as tk
+from tkinter import ttk
+import keyboard
+import threading
+import queue
+import json
+import time
+import sounddevice as sd
+from vosk import Model, KaldiRecognizer
+from orchestrator import Orchestrator
+
+orq = Orchestrator()
+
+# ===== CONFIGURAÇÕES DE VOZ =====
+SAMPLE_RATE = 16000
+PALAVRAS_ATIVACAO = ["mote", "moite", "noite", "monte", "note", "ativar",
+
+                 "boa noite", "olá note", "ei note", "oi note"]
+
+# Carrega modelo Vosk
+try:
+
+   modelo_vosk = Model("model")
+   VOSK_OK = True
+except Exception as e:
+   print(f"[AVISO] Modelo Vosk não encontrado: {e}")
+   print("Botão de microfone ficará desabilitado.")
+   modelo_vosk = None
+   VOSK_OK = False
+
+# ===== CORES =====
+COR_TRANSPARENTE = "#0a0a0a"
+COR_FUNDO = "#1e1e1e"
+COR_PLACEHOLDER = "#7a7a7a"
+COR_TEXTO = "#e8e8e8"
+COR_RESPOSTA = "#cfcfcf"
+COR_MIC_NORMAL = "#4a9eff"
+COR_MIC_GRAVANDO = "#ff4444"
+COR_MIC_PROCESSANDO = "#ffaa00"
+COR_BOTAO_HOVER = "#5ab0ff"
+PLACEHOLDER = "Pergunte qualquer coisa para a Noite..."
+FONTE = ("Segoe UI", 13)
+FONTE_RESPOSTA = ("Segoe UI", 11)
+FONTE_MIC = ("Segoe UI Symbol", 14, "bold")
+
+# ===== CORRETOR FONÉTICO =====
+import re
+
+def corrigir_palavra(palavra):
+   if not palavra:
+      return palavra
+   p = palavra.strip(".,!?;:")
+   p_lower = p.lower()
+
+   if re.match(r'^(abr|avr|abri|abriu|abril|abirr|abrí)', p_lower):
+      return "abra" if not p_lower.endswith(("r", "iu")) else "abrir"
+
+   if re.match(r'^(pesqui|pesquise|pesquisa|pesquis|pesquiss|peski|peskisa|pezquisa|pequisa|peskiza|puxa)',
+p_lower):
+
+      return "pesquise"
+   if re.match(r'^(prokur|procure|procura|procu)', p_lower):
+
+      return "procure"
+   if re.match(r'^(busk|busca|busque|buski|buc)', p_lower):
+
+      return "busca"
+   if re.match(r'^(tok|toca|toke|tocar)', p_lower):
+
+      return "toca"
+   if re.match(r'^(iutub|ioutube|youtub|youtube|yutub|yatube|rutube)', p_lower):
+
+      return "youtube"
+   if re.match(r'^(gugol|gogle|googl|gooogle|guugel)', p_lower):
+
+      return "google"
+   if re.match(r'^(list|lista|liste|listar)', p_lower):
+
+      return "lista"
+   if re.match(r'^(mostr|mostra|moste|mostre)', p_lower):
+
+      return "mostra"
+   if re.match(r'^(marc|marca|marque)', p_lower):
+
+      return "marque"
+   if re.match(r'^(ajend|agend|agende|ajende)', p_lower):
+
+      return "agende"
+   if re.match(r'^(lembr|lembre|lembra)', p_lower):
+
+      return "lembre"
+   if re.match(r'^(anota|anot|anote)', p_lower):
+
+      return "anota"
+   if re.match(r'^(guard|guarda|guarde)', p_lower):
+
+      return "guarda"
+   if re.match(r'^(crom|krom|cromo|croma)', p_lower):
+
+      return "chroma"
+   if re.match(r'^(arki|arqui|arquiv|arkivo|arquivo)', p_lower):
+
+      return "arquivo"
+   if p_lower in ["noites", "noytes", "noiti"]:
+
+      return "noite"
+   return p
+
+def corrigir_texto(texto):
+   if not texto:
+      return texto
+   palavras = texto.split()
+   corrigidas = []
+   for palavra in palavras:
+      pontuacao = ""
+      p_limpa = palavra
+      if p_limpa and p_limpa[-1] in ".,!?;:":
+
+          pontuacao = p_limpa[-1]
+          p_limpa = p_limpa[:-1]
+      corrigida = corrigir_palavra(p_limpa)
+      corrigidas.append(corrigida + pontuacao)
+   return ' '.join(corrigidas)
+
+def rounded_rect(canvas, x1, y1, x2, y2, raio=22, **kwargs):
+   pontos = [
+      x1 + raio, y1, x2 - raio, y1, x2, y1, x2, y1 + raio,
+      x2, y2 - raio, x2, y2, x2 - raio, y2, x1 + raio, y2,
+      x1, y2, x1, y2 - raio, x1, y1 + raio, x1, y1,
+   ]
+   return canvas.create_polygon(pontos, smooth=True, **kwargs)
+
+def abrir_janela():
+   janela = tk.Tk()
+   janela.title("")
+   janela.overrideredirect(True)
+   janela.attributes("-topmost", True)
+   janela.configure(bg=COR_TRANSPARENTE)
+   janela.attributes("-transparentcolor", COR_TRANSPARENTE)
+
+   largura = 620
+   altura_atual = 64
+   altura_max = 420
+   x = (janela.winfo_screenwidth() // 2) - (largura // 2)
+   y = janela.winfo_screenheight() - 460
+
+   janela.geometry(f"{largura}x{altura_atual}+{x}+{y}")
+
+   canvas = tk.Canvas(janela, width=largura, height=altura_atual,
+                    bg=COR_TRANSPARENTE, highlightthickness=0)
+
+   canvas.pack(fill="both", expand=True)
+
+   def desenhar(altura):
+      canvas.delete("fundo")
+      canvas.config(height=altura)
+      rounded_rect(canvas, 2, 2, largura - 2, altura - 2,
+                 raio=22, fill=COR_FUNDO, outline="", tags="fundo")
+      canvas.tag_lower("fundo")
+
+   desenhar(altura_atual)
+
+   # ===== DRAG DA JANELA =====
+   _drag_data = {"x": 0, "y": 0}
+
+   def iniciar_drag(event):
+      _drag_data["x"] = event.x
+      _drag_data["y"] = event.y
+
+   def arrastar(event):
+      novo_x = janela.winfo_x() + (event.x - _drag_data["x"])
+      novo_y = janela.winfo_y() + (event.y - _drag_data["y"])
+      janela.geometry(f"+{novo_x}+{novo_y}")
+canvas.bind("<ButtonPress-1>", iniciar_drag)
+canvas.bind("<B1-Motion>", arrastar)
+
+# ===== CAMPO DE ENTRADA =====
+entrada = tk.Entry(
+
+   canvas,
+   font=FONTE,
+   bg=COR_FUNDO,
+   fg=COR_PLACEHOLDER,
+   insertbackground=COR_TEXTO,
+   relief="flat",
+   bd=0,
+   disabledbackground=COR_FUNDO,
+   disabledforeground=COR_PLACEHOLDER,
+   highlightthickness=0
+)
+entrada.insert(0, PLACEHOLDER)
+entrada_id = canvas.create_window((largura - 80) // 2, 32, window=entrada, width=largura - 130)
+
+def ao_focar(event):
+   if entrada.get() == PLACEHOLDER:
+      entrada.delete(0, "end")
+      entrada.config(fg=COR_TEXTO)
+
+def ao_desfocar(event):
+   if entrada.get().strip() == "":
+      entrada.insert(0, PLACEHOLDER)
+      entrada.config(fg=COR_PLACEHOLDER)
+
+entrada.bind("<FocusIn>", ao_focar)
+entrada.bind("<FocusOut>", ao_desfocar)
+entrada.focus_force()
+
+# ===== BOTÃO DE MICROFONE =====
+mic_id = None
+mic_oval = None
+mic_texto_id = None
+gravando = [False]
+processando_audio = [False]
+mic_ativo = [VOSK_OK] # só ativo se Vosk carregou
+
+botao_x = largura - 60
+botao_y = 32
+botao_raio = 18
+
+def desenhar_mic(cor):
+   nonlocal mic_oval, mic_texto_id
+   canvas.delete("mic")
+   # Círculo de fundo
+   mic_oval = canvas.create_oval(
+      botao_x - botao_raio, botao_y - botao_raio,
+      botao_x + botao_raio, botao_y + botao_raio,
+      fill=cor, outline="", tags="mic"
+
+ 🎤 )
+
+   # Ícone do microfone ( )
+   mic_texto_id = canvas.create_text(
+
+  🎤 botao_x, botao_y,
+
+      text=" " if not gravando[0] else "■",
+      fill="#ffffff",
+      font=FONTE_MIC,
+   tags="mic"
+)
+
+def ao_clicar_mic(event=None):
+   if not mic_ativo[0] or processando_audio[0]:
+      return
+   if not gravando[0]:
+      iniciar_gravacao()
+   else:
+      parar_gravacao()
+
+def ao_passar_mic(event=None):
+   if mic_ativo[0] and not gravando[0] and not processando_audio[0]:
+      canvas.itemconfig(mic_oval, fill=COR_BOTAO_HOVER)
+
+def ao_sair_mic(event=None):
+   if not gravando[0] and not processando_audio[0]:
+      cor = COR_MIC_NORMAL if mic_ativo[0] else "#555555"
+      canvas.itemconfig(mic_oval, fill=cor)
+
+canvas.tag_bind("mic", "<Button-1>", ao_clicar_mic)
+canvas.tag_bind("mic", "<Enter>", ao_passar_mic)
+canvas.tag_bind("mic", "<Leave>", ao_sair_mic)
+
+if VOSK_OK:
+   desenhar_mic(COR_MIC_NORMAL)
+
+else:
+   desenhar_mic("#555555")
+
+# ===== GRAVAÇÃO DE ÁUDIO =====
+audio_queue = queue.Queue()
+gravacao_finalizada = threading.Event()
+audio_data = []
+
+def callback_mic(indata, frames, time_info, status):
+   if gravando[0]:
+      audio_queue.put(bytes(indata))
+
+def gravar_audio():
+   """Grava por 5 segundos ou até clicar de novo"""
+   recognizer_local = KaldiRecognizer(modelo_vosk, SAMPLE_RATE)
+   texto_final = ""
+   inicio = time.time()
+   silencio_inicio = None
+   TEMPO_MAX = 15.0 # máximo 15 segundos
+   SILENCIO_FIM = 3.0 # 3s de silêncio = fim
+
+with sd.RawInputStream(samplerate=SAMPLE_RATE, blocksize=8000,        dtype='int16',
+                    channels=1, callback=callback_mic):
+
+   while gravando[0] and (time.time() - inicio) < TEMPO_MAX:
+      try:
+          data = audio_queue.get(timeout=0.1)
+          if recognizer_local.AcceptWaveform(data):
+             resultado = json.loads(recognizer_local.Result())
+             fragmento = resultado.get("text", "").strip()
+             if fragmento:
+                texto_final = fragmento
+                silencio_inicio = None
+          else:
+             # Verifica silêncio (partial vazio)
+                parcial = json.loads(recognizer_local.PartialResult())
+                if not parcial.get("partial", "").strip():
+
+                    if silencio_inicio is None:
+                       silencio_inicio = time.time()
+
+                    elif time.time() - silencio_inicio > SILENCIO_FIM:
+                       break
+
+                else:
+                    silencio_inicio = None
+
+          except queue.Empty:
+             pass
+
+   # Pega último resultado
+   resultado = json.loads(recognizer_local.FinalResult())
+   if resultado.get("text", "").strip():
+
+      texto_final = resultado["text"].strip()
+
+   gravacao_finalizada.set()
+   return texto_final
+
+def iniciar_gravacao():
+   gravando[0] = True
+   gravacao_finalizada.clear()
+   # Limpa a fila
+   while not audio_queue.empty():
+      try:
+          audio_queue.get_nowait()
+      except queue.Empty:
+          break
+   desenhar_mic(COR_MIC_GRAVANDO)
+   entrada.config(state="normal")
+   if entrada.get() == PLACEHOLDER:
+      entrada.delete(0, "end")
+      entrada.config(fg=COR_TEXTO)
+
+   # Thread de gravação
+   def worker():
+
+      texto = gravar_audio()
+      janela.after(0, lambda: finalizar_gravacao(texto))
+
+   threading.Thread(target=worker, daemon=True).start()
+
+def parar_gravacao():
+   gravando[0] = False
+
+def finalizar_gravacao(texto):
+   gravando[0] = False
+   processando_audio[0] = True
+   desenhar_mic(COR_MIC_PROCESSANDO)
+
+   if texto:
+      # Aplica corretor
+      texto_corrigido = corrigir_texto(texto.lower())
+      print(f"[Microfone] Original: {texto}")
+      print(f"[Microfone] Corrigido: {texto_corrigido}")
+
+      entrada.delete(0, "end")
+      entrada.insert(0, texto_corrigido)
+      entrada.config(fg=COR_TEXTO)
+      entrada.focus_force()
+   else:
+      entrada.delete(0, "end")
+      entrada.insert(0, "(nada detectado)")
+      entrada.config(fg=COR_PLACEHOLDER)
+
+   # Volta ao normal após 500ms
+   janela.after(500, lambda: voltar_mic_normal())
+
+def voltar_mic_normal():
+   processando_audio[0] = False
+   if VOSK_OK:
+      desenhar_mic(COR_MIC_NORMAL)
+   else:
+      desenhar_mic("#555555")
+
+# ===== ÁREA DE RESPOSTA =====
+frame_resposta = tk.Frame(canvas, bg=COR_FUNDO)
+
+texto_resposta = tk.Text(
+   frame_resposta,
+   font=FONTE_RESPOSTA,
+   bg=COR_FUNDO,
+   fg=COR_RESPOSTA,
+   relief="flat",
+   bd=0,
+   wrap="word",
+   highlightthickness=0,
+   padx=4,
+   pady=4
+
+)
+scrollbar = tk.Scrollbar(frame_resposta, command=texto_resposta.yview,
+
+                     bg=COR_FUNDO, troughcolor=COR_FUNDO)
+texto_resposta.config(yscrollcommand=scrollbar.set)
+
+texto_resposta.pack(side="left", fill="both", expand=True)
+scrollbar.pack(side="right", fill="y")
+
+resposta_window_id = None
+
+def fechar(event=None):
+   gravando[0] = False
+   janela.destroy()
+
+def digitar_texto(texto, indice=0):
+   if indice == 0:
+      texto_resposta.config(state="normal")
+      texto_resposta.delete("1.0", "end")
+
+   if indice < len(texto):
+      texto_resposta.insert("end", texto[indice])
+      texto_resposta.see("end")
+      janela.after(15, lambda: digitar_texto(texto, indice + 1))
+
+   else:
+      texto_resposta.config(state="disabled")
+      entrada.config(state="normal")
+      entrada.delete(0, "end")
+      entrada.focus_force()
+
+def mostrar_resposta(resposta):
+   nonlocal resposta_window_id
+   nova_altura = min(altura_max, 90 + 24 * (resposta.count("\n") + (len(resposta) // 60) + 1))
+      nova_altura = max(nova_altura, 150)
+
+      janela.geometry(f"{largura}x{nova_altura}+{x}+{y}")
+      desenhar(nova_altura)
+      canvas.coords(entrada_id, (largura - 80) // 2, 32)
+      canvas.coords(
+   mic_oval,
+   botao_x - botao_raio,
+   botao_y - botao_raio,
+   botao_x + botao_raio,
+   botao_y + botao_raio
+)
+      canvas.coords(mic_texto_id, botao_x, botao_y)
+
+      if resposta_window_id is None:
+          resposta_window_id = canvas.create_window(
+             largura // 2, (nova_altura + 60) // 2,
+             window=frame_resposta, width=largura - 50, height=nova_altura - 70
+          )
+
+      else:
+          canvas.coords(resposta_window_id, largura // 2, (nova_altura + 60) // 2)
+          canvas.itemconfig(resposta_window_id, height=nova_altura - 70)
+
+      digitar_texto(resposta)
+
+   def processar_async(comando):
+      resposta = orq.processar(comando)
+      janela.after(0, lambda: mostrar_resposta(resposta))
+
+   def processar(event=None):
+      comando = entrada.get().strip()
+      if not comando or comando == PLACEHOLDER or comando == "(nada detectado)":
+          return
+
+      entrada.config(state="disabled")
+      threading.Thread(target=processar_async, args=(comando,), daemon=True).start()
+
+   entrada.bind("<Return>", processar)
+   entrada.bind("<Escape>", fechar)
+
+   # Atalho de teclado pra ativar microfone: F2
+   janela.bind("<F2>", lambda e: ao_clicar_mic())
+
+   janela.mainloop()
+
+def escutar_atalho():
+   print("Noite pronta. Pressione Alt+Espaço para abrir.")
+   print("Dica: dentro da janela, pressione F2 para usar o microfone.")
+   keyboard.add_hotkey("alt+space", lambda: threading.Thread(target=abrir_janela).start())
+   keyboard.wait()
+
+if __name__ == "__main__":
+   escutar_atalho()
+
+import tkinter as tk
+import keyboard
+import threading
+import queue
+import json
+import time
+import re
+import sounddevice as sd
+from vosk import Model, KaldiRecognizer
+from orchestrator import Orchestrator
+
+orq = Orchestrator()
+
+# ===== CONFIGURAÇÕES DE VOZ =====
+SAMPLE_RATE = 16000
+PALAVRAS_ATIVACAO = ["mote", "moite", "noite", "monte", "note", "ativar",
+
+                 "boa noite", "olá note", "ei note", "oi note"]
+
+try:
+   modelo_vosk = Model("model")
+   VOSK_OK = True
+   print("[OK] Modelo Vosk carregado")
+
+except Exception as e:
+   print(f"[AVISO] Modelo Vosk não encontrado: {e}")
+   modelo_vosk = None
+   VOSK_OK = False
+
+# ===== CORES =====
+COR_TRANSPARENTE = "#0a0a0a71"
+COR_FUNDO = "#1e1e1e"
+COR_PLACEHOLDER = "#7a7a7a"
+COR_TEXTO = "#e8e8e8"
+COR_RESPOSTA = "#cfcfcf"
+COR_MIC_NORMAL = "#ffffff"
+COR_MIC_GRAVANDO = "#44e3ff"
+COR_MIC_PROCESSANDO = "#ff6600"
+COR_BOTAO_HOVER = "#44e3ff"
+
+PLACEHOLDER = "Fale com Note"
+FONTE = ("Segoe UI", 13)
+FONTE_RESPOSTA = ("Segoe UI", 11)
+FONTE_MIC = ("Segoe UI Symbol", 14, "bold")
+
+# ===== CORRETOR FONÉTICO =====
+def corrigir_palavra(palavra):
+
+   if not palavra:
+      return palavra
+
+   p = palavra.strip(".,!?;:")
+   p_lower = p.lower()
+
+   if re.match(r'^(abr|avr|abri|abriu|abril|abirr|abrí)', p_lower):
+      return "abra" if not p_lower.endswith(("r", "iu")) else "abrir"
+
+   if re.match(r'^(pesqui|pesquise|pesquisa|pesquis|pesquiss|peski|peskisa|pezquisa|pequisa|peskiza|puxa)',
+p_lower):
+
+      return "pesquise"
+   if re.match(r'^(prokur|procure|procura|procu|prócura)', p_lower):
+
+      return "procure"
+   if re.match(r'^(busk|busca|busque|buski|buc|búusca)', p_lower):
+
+      return "busca"
+   if re.match(r'^(tok|toca|toke|tocar|tóca)', p_lower):
+
+      return "toca"
+   if re.match(r'^(iutub|ioutube|youtub|youtube|yutub|yatube|ióutube|rútube|rutube|yt)', p_lower):
+
+      return "youtube"
+   if re.match(r'^(gugol|gogle|googl|gooogle|guugel|gúgou)', p_lower):
+      return "google"
+
+   if re.match(r'^(list|lista|liste|listar|lísta)', p_lower):
+      return "lista"
+
+   if re.match(r'^(mostr|mostra|moste|mostre|móstra)', p_lower):
+      return "mostra"
+
+   if re.match(r'^(marc|marca|marque|márca)', p_lower):
+      return "marque"
+
+   if re.match(r'^(ajend|agend|agende|ajende|ajénda)', p_lower):
+      return "agende"
+
+   if re.match(r'^(lembr|lembre|lembra|lémbre|lemb|lémbra)', p_lower):
+      return "lembre"
+
+   if re.match(r'^(anota|anot|anote|anóta)', p_lower):
+      return "anota"
+
+   if re.match(r'^(guard|guarda|guarde|guárda)', p_lower):
+      return "guarda"
+
+   if re.match(r'^(crom|krom|cromo|croma|cróma)', p_lower):
+      return "chroma"
+
+   if re.match(r'^(arki|arqui|arquiv|arkivo|arquivo|árquivo)', p_lower):
+      return "arquivo"
+
+   if re.match(r'^(comput|computad|pc|piq)', p_lower):
+      return "computador"
+
+   if p_lower in ["noites", "noytes", "noiti"]:
+      return "noite"
+
+   if re.match(r'^(diskord|discor|discórd|discod|diskor|discordia|discórdia|díscord)', p_lower):
+      return "discord"
+
+   if re.match(r'^(spotifai|spotifi|espotify|spotfy|esporte)', p_lower):
+      return "spotify"
+
+   if re.match(r'^(fech|fecha|feche|fechar|fexa|fexa)', p_lower):
+      return "fechar"
+
+   if re.match(r'^(ligar|liga|liqar|lígar|ligue)', p_lower):
+      return "ligar"
+
+   if re.match(r'^(desliga|desligar|dezliga|desli|desligae)', p_lower):
+      return "desligar"
+
+   if re.match(r'^(whatsapp|zap|uatsap|uatsapp|watsap|watsapp|uatzap)', p_lower):
+      return "whatsapp"
+
+   if re.match(r'^(gmail|gmeil|guimeil|gamal)', p_lower):
+      return "gmail"
+
+   if re.match(r'^(waze|uaze|uáze)', p_lower):
+      return "waze"
+
+   if re.match(r'^(maps|mapa|mapss|mape)', p_lower):
+      return "maps"
+
+   return p
+
+def corrigir_texto(texto):
+   if not texto:
+      return texto
+   palavras = texto.split()
+   corrigidas = []
+   for palavra in palavras:
+      pontuacao = ""
+      p_limpa = palavra
+      if p_limpa and p_limpa[-1] in ".,!?;:":
+          pontuacao = p_limpa[-1]
+          p_limpa = p_limpa[:-1]
+      corrigida = corrigir_palavra(p_limpa)
+      corrigidas.append(corrigida + pontuacao)
+   return ' '.join(corrigidas)
+def extrair_comando(texto):
+   """Remove a wake word e retorna o resto"""
+   texto = texto.lower().strip()
+   for palavra in PALAVRAS_ATIVACAO:
+      if palavra in texto:
+          partes = texto.split(palavra, 1)
+          return partes[1].strip() if len(partes) > 1 else ""
+   return texto
+
+def rounded_rect(canvas, x1, y1, x2, y2, raio=22, **kwargs):
+   pontos = [
+      x1 + raio, y1, x2 - raio, y1, x2, y1, x2, y1 + raio,
+      x2, y2 - raio, x2, y2, x2 - raio, y2, x1 + raio, y2,
+      x1, y2, x1, y2 - raio, x1, y1 + raio, x1, y1,
+   ]
+   return canvas.create_polygon(pontos, smooth=True, **kwargs)
+
+# ===== ESTADO GLOBAL DA JANELA (compartilhado entre voz e interface) =====
+janela_atual = {"win": None, "mostrar_resposta": None, "abrir": None}
+
+def abrir_janela():
+   if janela_atual["win"] is not None:
+      try:
+          janela_atual["win"].lift()
+          janela_atual["win"].focus_force()
+          return
+      except Exception:
+          pass
+
+   janela = tk.Tk()
+   janela.title("")
+   janela.overrideredirect(True)
+   janela.attributes("-topmost", True)
+   janela.configure(bg=COR_TRANSPARENTE)
+   janela.attributes("-transparentcolor", COR_TRANSPARENTE)
+
+   largura = 620
+   altura_atual = 64
+   altura_max = 420
+   x = (janela.winfo_screenwidth() // 2) - (largura // 2)
+   y = janela.winfo_screenheight() - 460
+
+   janela.geometry(f"{largura}x{altura_atual}+{x}+{y}")
+
+   canvas = tk.Canvas(janela, width=largura, height=altura_atual,
+                    bg=COR_TRANSPARENTE, highlightthickness=0)
+
+   canvas.pack(fill="both", expand=True)
+
+   def desenhar(altura):
+      canvas.delete("fundo")
+      canvas.config(height=altura)
+      rounded_rect(canvas, 2, 2, largura - 2, altura - 2,
+                  raio=22, fill=COR_FUNDO, outline="", tags="fundo")
+      canvas.tag_lower("fundo")
+
+   desenhar(altura_atual)
+# ===== DRAG DA JANELA =====
+_drag_data = {"x": 0, "y": 0}
+
+def iniciar_drag(event):
+   _drag_data["x"] = event.x
+   _drag_data["y"] = event.y
+
+def arrastar(event):
+   novo_x = janela.winfo_x() + (event.x - _drag_data["x"])
+   novo_y = janela.winfo_y() + (event.y - _drag_data["y"])
+   janela.geometry(f"+{novo_x}+{novo_y}")
+
+canvas.bind("<ButtonPress-1>", iniciar_drag)
+canvas.bind("<B1-Motion>", arrastar)
+
+# ===== CAMPO DE ENTRADA =====
+entrada = tk.Entry(
+
+   canvas,
+   font=FONTE,
+   bg=COR_FUNDO,
+   fg=COR_PLACEHOLDER,
+   insertbackground=COR_TEXTO,
+   relief="flat",
+   bd=0,
+   disabledbackground=COR_FUNDO,
+   disabledforeground=COR_PLACEHOLDER,
+   highlightthickness=0
+)
+entrada.insert(0, PLACEHOLDER)
+entrada_id = canvas.create_window((largura - 80) // 2, 32, window=entrada, width=largura - 130)
+
+def ao_focar(event):
+   if entrada.get() == PLACEHOLDER:
+      entrada.delete(0, "end")
+      entrada.config(fg=COR_TEXTO)
+
+def ao_desfocar(event):
+   if entrada.get().strip() == "":
+      entrada.insert(0, PLACEHOLDER)
+      entrada.config(fg=COR_PLACEHOLDER)
+
+entrada.bind("<FocusIn>", ao_focar)
+entrada.bind("<FocusOut>", ao_desfocar)
+entrada.focus_force()
+
+# ===== BOTÃO DE MICROFONE (manual, F2 ou clique) =====
+mic_oval = None
+mic_texto_id = None
+gravando_manual = [False]
+processando_audio = [False]
+mic_ativo = [VOSK_OK]
+
+botao_x = largura - 60
+botao_y = 32
+botao_raio = 18
+
+def desenhar_mic(cor):
+   nonlocal mic_oval, mic_texto_id
+   canvas.delete("mic")
+   mic_oval = canvas.create_oval(
+      botao_x - botao_raio, botao_y - botao_raio,
+      botao_x + botao_raio, botao_y + botao_raio,
+      fill=cor, outline="", tags="mic"
+
+   )
+   mic_texto_id = canvas.create_text(
+
+  🎤 botao_x, botao_y,
+
+      text=" " if not gravando_manual[0] else "■",
+      fill="#ffffff",
+      font=FONTE_MIC,
+      tags="mic"
+   )
+
+def ao_clicar_mic(event=None):
+   if not mic_ativo[0] or processando_audio[0]:
+      return
+   if not gravando_manual[0]:
+      iniciar_gravacao_manual()
+   else:
+      gravando_manual[0] = False
+
+def ao_passar_mic(event=None):
+   if mic_ativo[0] and not gravando_manual[0] and not processando_audio[0]:
+      canvas.itemconfig(mic_oval, fill=COR_BOTAO_HOVER)
+
+def ao_sair_mic(event=None):
+   if not gravando_manual[0] and not processando_audio[0]:
+      cor = COR_MIC_NORMAL if mic_ativo[0] else "#555555"
+      canvas.itemconfig(mic_oval, fill=cor)
+
+canvas.tag_bind("mic", "<Button-1>", ao_clicar_mic)
+canvas.tag_bind("mic", "<Enter>", ao_passar_mic)
+canvas.tag_bind("mic", "<Leave>", ao_sair_mic)
+
+if VOSK_OK:
+   desenhar_mic(COR_MIC_NORMAL)
+
+else:
+   desenhar_mic("#555555")
+
+# ===== GRAVAÇÃO MANUAL (F2 / clique no mic) - stream próprio =====
+def gravar_audio_manual():
+
+   """Grava até 8s ou até clicar de novo / 2s de silêncio"""
+   recognizer_local = KaldiRecognizer(modelo_vosk, SAMPLE_RATE)
+   audio_q = queue.Queue()
+
+   def cb(indata, frames, time_info, status):
+      audio_q.put(bytes(indata))
+
+   texto_final = ""
+   inicio = time.time()
+   silencio_inicio = None
+   TEMPO_MAX = 10.0
+   SILENCIO_FIM = 1.3
+
+   with sd.RawInputStream(samplerate=SAMPLE_RATE, blocksize=8000, dtype='int16',
+                       channels=1, callback=cb):
+
+      while gravando_manual[0] and (time.time() - inicio) < TEMPO_MAX:
+          try:
+             data = audio_q.get(timeout=0.1)
+          except queue.Empty:
+             continue
+
+          if recognizer_local.AcceptWaveform(data):
+             resultado = json.loads(recognizer_local.Result())
+             fragmento = resultado.get("text", "").strip()
+             if fragmento:
+                texto_final = fragmento
+                silencio_inicio = None
+
+          else:
+             parcial = json.loads(recognizer_local.PartialResult())
+             if not parcial.get("partial", "").strip():
+                if silencio_inicio is None:
+                    silencio_inicio = time.time()
+                elif time.time() - silencio_inicio > SILENCIO_FIM:
+                    break
+             else:
+                silencio_inicio = None
+
+   resultado = json.loads(recognizer_local.FinalResult())
+   if resultado.get("text", "").strip():
+
+      texto_final = resultado["text"].strip()
+
+   return texto_final
+
+def iniciar_gravacao_manual():
+   gravando_manual[0] = True
+   desenhar_mic(COR_MIC_GRAVANDO)
+   entrada.config(state="normal")
+   if entrada.get() == PLACEHOLDER:
+      entrada.delete(0, "end")
+      entrada.config(fg=COR_TEXTO)
+   entrada.delete(0, "end")
+   entrada.insert(0, "Ouvindo...")
+
+   def worker():
+      texto = gravar_audio_manual()
+      janela.after(0, lambda: finalizar_gravacao_manual(texto))
+
+   threading.Thread(target=worker, daemon=True).start()
+
+def finalizar_gravacao_manual(texto):
+   gravando_manual[0] = False
+   processando_audio[0] = True
+   desenhar_mic(COR_MIC_PROCESSANDO)
+
+   entrada.delete(0, "end")
+
+   if texto:
+      texto_corrigido = corrigir_texto(texto.lower())
+      print(f"[Mic Manual] Original: {texto} -> Corrigido: {texto_corrigido}")
+      entrada.insert(0, texto_corrigido)
+      entrada.config(fg=COR_TEXTO)
+      entrada.focus_force()
+
+   else:
+      entrada.insert(0, PLACEHOLDER)
+      entrada.config(fg=COR_PLACEHOLDER)
+
+   janela.after(400, voltar_mic_normal)
+
+def voltar_mic_normal():
+   processando_audio[0] = False
+   if VOSK_OK:
+
+      desenhar_mic(COR_MIC_NORMAL)
+   else:
+
+      desenhar_mic("#555555")
+
+# ===== ÁREA DE RESPOSTA =====
+frame_resposta = tk.Frame(canvas, bg=COR_FUNDO)
+
+texto_resposta = tk.Text(
+   frame_resposta,
+   font=FONTE_RESPOSTA,
+   bg=COR_FUNDO,
+   fg=COR_RESPOSTA,
+   relief="flat",
+   bd=0,
+   wrap="word",
+   highlightthickness=0,
+   padx=4,
+   pady=4
+
+)
+scrollbar = tk.Scrollbar(frame_resposta, command=texto_resposta.yview,
+
+                     bg=COR_FUNDO, troughcolor=COR_FUNDO)
+texto_resposta.config(yscrollcommand=scrollbar.set)
+
+texto_resposta.pack(side="left", fill="both", expand=True)
+scrollbar.pack(side="right", fill="y")
+
+resposta_window_id = None
+
+def fechar(event=None):
+   janela_atual["win"] = None
+   janela_atual["mostrar_resposta"] = None
+   janela.destroy()
+
+def digitar_texto(texto, indice=0):
+   if indice == 0:
+      texto_resposta.config(state="normal")
+      texto_resposta.delete("1.0", "end")
+
+   if indice < len(texto):
+      texto_resposta.insert("end", texto[indice])
+      texto_resposta.see("end")
+      janela.after(15, lambda: digitar_texto(texto, indice + 1))
+
+   else:
+      texto_resposta.config(state="disabled")
+      entrada.config(state="normal")
+      entrada.delete(0, "end")
+      entrada.focus_force()
+
+def mostrar_resposta(resposta):
+   nonlocal resposta_window_id
+   nova_altura = min(altura_max, 90 + 24 * (resposta.count("\n") + (len(resposta) // 60) + 1))
+   nova_altura = max(nova_altura, 150)
+
+   janela.geometry(f"{largura}x{nova_altura}+{x}+{y}")
+   desenhar(nova_altura)
+   canvas.coords(entrada_id, (largura - 80) // 2, 32)
+   canvas.coords(
+
+      mic_oval,
+   botao_x - botao_raio, botao_y - botao_raio,
+   botao_x + botao_raio, botao_y + botao_raio
+)
+canvas.coords(mic_texto_id, botao_x, botao_y)
+
+if resposta_window_id is None:
+   resposta_window_id = canvas.create_window(
+      largura // 2, (nova_altura + 60) // 2,
+      window=frame_resposta, width=largura - 50, height=nova_altura - 70
+   )
+
+else:
+   canvas.coords(resposta_window_id, largura // 2, (nova_altura + 60) // 2)
+   canvas.itemconfig(resposta_window_id, height=nova_altura - 70)
+
+digitar_texto(resposta)
+
+def processar_async(comando):
+   resposta = orq.processar(comando)
+   janela.after(0, lambda: mostrar_resposta(resposta))
+
+def processar(event=None):
+   comando = entrada.get().strip()
+   if not comando or comando == PLACEHOLDER or comando in ("(nada detectado)", "Ouvindo..."):
+      return
+
+entrada.config(state="disabled")
+threading.Thread(target=processar_async, args=(comando,), daemon=True).start()
+
+entrada.bind("<Return>", processar)
+entrada.bind("<Escape>", fechar)
+janela.bind("<F2>", lambda e: ao_clicar_mic())
+
+# Registra no estado global pra voz poder usar              daemon=True).start()
+janela_atual["win"] = janela
+janela_atual["mostrar_resposta"] = mostrar_resposta
+janela_atual["entrada"] = entrada
+janela_atual["processar_comando"] = lambda texto: (
+
+   entrada.config(state="normal"),
+   entrada.delete(0, "end"),
+   entrada.insert(0, texto),
+   threading.Thread(target=processar_async, args=(texto,),
+)
+
+janela.protocol("WM_DELETE_WINDOW", fechar)
+janela.mainloop()
+
+# ===== ESCUTA DE VOZ EM BACKGROUND =====
+def escutar_voz():
+
+   if not VOSK_OK:
+      print("[Voz] Vosk não disponível, microfone desativado.")
+      return
+
+   recognizer = KaldiRecognizer(modelo_vosk, SAMPLE_RATE)
+   q = queue.Queue()
+
+   def callback(indata, frames, time_info, status):
+      q.put(bytes(indata))
+
+   print("[Voz] Escutando em background... Diga 'Note' + comando para abrir a janela.")
+   with sd.RawInputStream(samplerate=SAMPLE_RATE, blocksize=8000, dtype='int16',
+                       channels=1, callback=callback):
+
+      while True:
+          try:
+             data = q.get(timeout=1)
+          except queue.Empty:
+             continue
+
+          if recognizer.AcceptWaveform(data):
+             try:
+                resultado = json.loads(recognizer.Result())
+                texto = resultado.get("text", "").strip().lower()
+             except Exception:
+                continue
+
+             if not texto:
+                continue
+
+             texto_corrigido = corrigir_texto(texto)
+             if texto_corrigido != texto:
+
+                print(f"[Voz] Ouvido: {texto} -> Corrigido: {texto_corrigido}")
+             else:
+
+                print(f"[Voz] Ouvido: {texto_corrigido}")
+
+             tem_wake = any(p in texto_corrigido for p in PALAVRAS_ATIVACAO)
+             if not tem_wake:
+
+                continue
+
+             comando = extrair_comando(texto_corrigido)
+             if not comando:
+
+                continue
+
+             print(f"[Voz] Comando: {comando}")
+
+             def acionar():
+                if janela_atual["win"] is None:
+                    abrir_janela_em_thread_principal_pendente.append(comando)
+                else:
+                    janela_atual["processar_comando"](comando)
+
+             acionar()
+
+abrir_janela_em_thread_principal_pendente = []
+
+def checar_pendentes_loop(root_dummy):
+   if abrir_janela_em_thread_principal_pendente:
+      comando = abrir_janela_em_thread_principal_pendente.pop(0)
+      abrir_janela()
+      if janela_atual.get("processar_comando"):
+          janela_atual["processar_comando"](comando)
+   root_dummy.after(200, lambda: checar_pendentes_loop(root_dummy))
+
+def main():
+   print(">" * 50)
+   print(" NOTE - Assistente Pessoal")
+   print("<" * 50)
+   print("Alt + Espaço para abrir a interface.")
+   print("Diga 'Note' Abrir para usar por voz.")
+   print("Dentro da janela, F2 ativa o microfone manual.")
+   print("~" * 50)
+
+   keyboard.add_hotkey("alt+space", lambda: threading.Thread(target=abrir_janela, daemon=True).start())
+
+   threading.Thread(target=escutar_voz, daemon=True).start()
+
+   root = tk.Tk()
+   root.withdraw()
+   checar_pendentes_loop(root)
+   root.mainloop()
+
+if __name__ == "__main__":
+   main()
+
