@@ -1,0 +1,172 @@
+﻿Relatório Técnico de Engenharia de Sistemas e Otimização Arquitetural: Assistente Noite 2.0
+Diagnóstico Crítico da Infraestrutura de Hardware e Desgargalhamento de CPU/GPU
+A arquitetura de execução local da assistente Noite 2.0 é estritamente delimitada pelas capacidades físicas da máquina de referência, composta por um processador Intel Core i7-3770 de terceira geração, uma placa de vídeo NVIDIA GeForce GTX 1660 Super com 6 GB de VRAM GDDR6, 16 GB de memória RAM DDR3 em canal duplo e armazenamento via SSD SATA. O ponto de vulnerabilidade primário dessa infraestrutura reside no processador, que carece de suporte às extensões vetoriais AVX2 e FMA3, limitando-se ao suporte do conjunto de instruções AVX 1.0 e SSE 4.2. Essa limitação técnica exige uma reavaliação profunda de todos os runtimes e bibliotecas compilados para execução na CPU.
+Bibliotecas modernas de inferência em CPU, como o CTranslate2 (utilizado pelo motor de reconhecimento de fala faster-whisper) e o ONNX Runtime (utilizado pelo motor de síntese de voz Piper TTS), dependem intensamente de instruções AVX2 e VNNI para acelerar operações de álgebra linear e vetorial com inteiros quantizados (INT8). Na ausência do conjunto AVX2, esses motores realizam um fallback automático para instrução SSE 4.2. Esse redirecionamento resulta em um aumento drástico dos ciclos de clock por token gerado ou segundo de áudio processado, gerando maior latência. Para mitigar a saturação da CPU por contenção de threads, o sistema deve gerenciar rigidamente a alocação de núcleos, limitando o paralelismo ao número de núcleos físicos da CPU, sem ultrapassar o teto de 4 threads de processamento.
+A placa de vídeo GTX 1660 Super disponibiliza uma margem bruta de 6 GB de VRAM GDDR6. No entanto, a interface gráfica do Windows e os processos essenciais do sistema operacional reservam em média de 800 MB a 1 GB dessa memória dedicada. Essa reserva reduz a capacidade utilizável real para aceleração de inteligência artificial a aproximadamente 5,2 GB de VRAM. Para assegurar a estabilidade contínua da aplicação, evitando falhas por estouro de memória (Out of Memory - OOM) ou a transferência indesejada de dados para a memória RAM DDR3 de baixa largura de banda, toda a pilha de modelos locais deve ser dimensionada para operar dentro de um teto operacional fixado em 4,5 GB de VRAM.
+Componente de Hardware
+	Limitação Identificada
+	Impacto no Runtime de IA
+	Estratégia de Mitigação Arquitetural
+	CPU Intel i7-3770
+	Ausência de AVX2 / FMA3
+	Fallback para SSE 4.2 no CTranslate2 e ONNX Runtime, reduzindo o throughput INT8.
+	Limitar intra_threads e inter_threads a no máximo 4 threads físicas.
+	GPU GTX 1660 Super
+	6 GB VRAM GDDR6
+	Teto de capacidade para modelos acima de 7B parâmetros e janelas de contexto extensas.
+	Dedicar a VRAM integralmente ao LLM 3B com quantização de cache KV.
+	RAM 16 GB DDR3
+	Baixa largura de banda
+	Alta latência durante o offloading parcial de camadas da VRAM para a memória do sistema.
+	Manter 100% das camadas do LLM principal residentes na GPU com a flag -ngl 999.
+	VRAM do Sistema
+	Reserva do Windows (\sim 800\text{ MB})
+	Margem utilizável líquida de aproximadamente 5,2\text{ GB} VRAM.
+	Fixar o orçamento global de memória com um limite rígido de segurança em 4,5\text{ GB}.
+	Otimização da Camada de Inteligência Local e Gestão Concorrente de VRAM
+O modelo local principal selecionado para a arquitetura Noite 2.0 é o Qwen 2.5 3B Instruct, quantizado no formato Q4_K_M e executado via Ollama ou pelo backend direto do llama.cpp. O tamanho estático dos pesos desse modelo na VRAM é de aproximadamente 2,20\text{ GB}. O consumo total de VRAM durante a inferência autoregressiva é determinado pela soma dos pesos do modelo, da estrutura do cache de Chaves e Valores (KV Cache) e dos buffers de trabalho temporários alocados pela biblioteca CUDA, expressa matematicamente por:
+\text{VRAM}_{\text{total}} = \text{VRAM}_{\text{pesos}} + \text{VRAM}_{\text{KV Cache}} + \text{VRAM}_{\text{buffers}}
+A pegada de memória do KV Cache cresce de forma diretamente proporcional ao tamanho da janela de contexto (\text{SeqLen}) e ao número de camadas do modelo. O dimensionamento do KV Cache é calculado pela seguinte relação:
+\text{VRAM}_{\text{KV Cache}} = 2 \times L \times H \times D \times S \times B
+Nessa equação, L representa a quantidade de camadas da rede, H indica o número de cabeças de atenção para Chaves e Valores, D reflete a dimensão por cabeça, S corresponde ao tamanho da sequência em tokens, e B denota a precisão em bytes do tipo de dado armazenado. Em precisão padrão FP16 (B = 2\text{ bytes}), uma janela de contexto expandida exige uma quantidade substancial de VRAM, comprometendo a margem do sistema.
+Para otimizar a alocação de memória sem sacrificar a capacidade de raciocínio em tarefas longas, adota-se a quantização do KV Cache para a precisão q8_0. Essa configuração é ativada via instrução OLLAMA_KV_CACHE_TYPE=q8_0 no Ollama ou pelas flags -ctk q8_0 -ctv q8_0 no llama.cpp. A quantização em q8_0 reduz a pegada do KV Cache para cerca de 53\% do tamanho necessário em FP16, oferecendo uma economia de memória de aproximadamente 47\% com degradação perceptiva nula na precisão do modelo. Opções de quantização mais agressivas, como q4_0, devem ser descartadas para modelos de atenção total, pois causam perda de coerência semântica e reduzem a velocidade de geração de tokens durante a etapa de decoding.
+A habilitação do mecanismo FlashAttention (-fa ou --flash-attn on) é um requisito obrigatório ao utilizar o KV Cache quantizado no llama.cpp e Ollama. O FlashAttention reformula o cálculo das matrizes de atenção dividindo os tensores em blocos processados na memória SRAM da GPU. Essa abordagem evita a materialização da matriz de atenção em VRAM e provê suporte nativo aos kernels de desquantização do KV Cache.
+Configuração do Modelo
+	Contexto Máximo (S)
+	Precisão do KV Cache
+	Consumo de Pesos
+	Consumo do KV Cache
+	VRAM Total Estimada
+	Qwen 2.5 3B (FP16 KV)
+	4.096 tokens
+	FP16 (16-bit)
+	2,20\text{ GB}
+	\sim 0,42\text{ GB}
+	2,82\text{ GB}
+	Qwen 2.5 3B (FP16 KV)
+	16.384 tokens
+	FP16 (16-bit)
+	2,20\text{ GB}
+	\sim 1,68\text{ GB}
+	4,08\text{ GB}
+	Qwen 2.5 3B (q8_0 KV)
+	16.384 tokens
+	INT8 (q8_0)
+	2,20\text{ GB}
+	\sim 0,85[span_44](start_span)[span_44](end_span)[span_54](start_span)[span_54](end_span)\text{ GB}
+	3,25\text{ GB}
+	Qwen 2.5 3B (q8_0 KV)
+	32.768 tokens
+	INT8 (q8_0)
+	2,20\text{ GB}
+	\sim 1,70[span_46](start_span)[span_46](end_span)[span_56](start_span)[span_56](end_span)\text{ GB}
+	4,10\text{ GB}
+	A configuração do modelo principal com contexto de 16.384 tokens e KV Cache em q8_0 estabiliza o consumo total da GPU em aproximadamente 3,25\text{ GB}. Essa alocação deixa uma margem de segurança de 1,95\text{ GB} na VRAM da GTX 1660 Super. Essa folga impede o surgimento de travamentos na interface do Windows e permite carregar modelos multimodais de visão computacional de pequeno porte sob demanda, liberando a memória imediatamente após a inferência sem causar contenção.
+Reestruturação do Núcleo Assíncrono e Roteamento Hierárquico
+A verificação do código legado revelou falhas estruturais que comprometiam a estabilidade do sistema. O código anterior invocava asyncio.run() repetidamente a cada fala do usuário, destruindo e recriando o loop de eventos continuamente. Essa prática impedia a manutenção de tarefas assíncronas de longa duração em segundo plano. Além disso, a saída de áudio dependia da biblioteca playsound, que opera de forma síncrona e bloqueia a thread de execução principal durante a reprodução de som. O código também apresentava conflitos de concorrência resultantes de threads secundárias tentando manipular diretamente widgets da interface gráfica em Tkinter, além de falhas na extração de respostas estruturadas via pesquisas rudimentares de delimitadores JSON.
+Para resolver essas inconsistências, a Noite 2.0 adota uma arquitetura orientada a eventos, utilizando a biblioteca PySide6/Qt6 integrada ao loop assíncrono do Python por meio do ecossistema qasync. Essa integração permite que o loop de eventos da interface gráfica e o loop do asyncio rodem harmonicamente na mesma thread principal, eliminando travamentos de interface e garantindo comunicação não-bloqueante entre o motor de áudio e os agentes do sistema.
+O processamento das solicitações do usuário é estruturado em um roteador inteligente composto por três camadas hierárquicas, projetado para minimizar a latência e racionalizar o uso do poder computacional.
+A Camada 1 é inteiramente determinística e opera sem a invocação de modelos de linguagem. Ela faz uso da função legado otimizada detectar_acao_rapida(), recorrendo a expressões regulares e heurísticas para identificar comandos operacionais diretos do sistema Windows, como alteração de volume, abertura de aplicativos conhecidos e controle de mídias. Quando uma solicitação coincide com esses padrões, a ação é executada imediatamente com latência inferior a 10 ms e consumo zero de inferência.
+A Camada 2 é ativada quando a entrada em linguagem natural exige interpretação contextual ou seleção de ferramentas locais. Nessa camada, a solicitação é processada pelo modelo local Qwen 2.5 3B, que classifica a intenção do usuário e gera saídas estruturadas em formato JSON, validadas rigorosamente contra esquemas definidos no Pydantic.
+A Camada 3 é reservada exclusivamente para tarefas de alta complexidade cognitiva, tais como engenharia de software, refatoração de código-fonte, geração de scripts Luau complexos para Roblox Studio e análises extensas de documentos. Essa camada encaminha a requisição para modelos em nuvem de alta capacidade, como o Claude 3.5 Sonnet, utilizando a abstração do gateway de modelos LiteLLM e exigindo autorização prévia do usuário.
+Camada de Roteamento
+	Mecanismo de Execução
+	Latência Média
+	Consumo de VRAM
+	Destino do Comando
+	Camada 1: Determinística
+	Expressões Regulares / Heurísticas
+	< 10\text{ ms}
+	0\text{ MB}
+	Automação Win32 / Sistema Operacional
+	Camada 2: Inteligência Local
+	Qwen 2.5 3B Q4_K_M (Ollama)
+	200 - 500\text{ ms}
+	\sim 3,25\text{ GB}
+	Chamada de Ferramentas / Respostas
+	Camada 3: Inteligência em Nuvem
+	Claude 3.5 Sonnet / LiteLLM
+	1.000 - 3.000\text{ ms}
+	0\text{ MB} (Local)
+	Tarefas Complexas / Refatoração
+	Reformulação do Pipeline de Voz e Tratamento Latente sem AVX2
+A substituição dos serviços externos de voz por uma solução 100% local e assíncrona exige o encadeamento contínuo de cinco componentes especializados. O pipeline é alimentado pela captura contínua de áudio do microfone através da biblioteca sounddevice, configurada para amostrar áudio PCM mono a 16 kHz. Os blocos de áudio capturados são enviados imediatamente ao Silero VAD v5, um modelo de detecção de atividade de voz de baixíssimo consumo computacional que filtra o silêncio e ruídos de fundo antes de acionar os estágios subsequentes, consumindo menos de 10 ms por bloco de CPU.
+Assim que o Silero VAD confirma a presenção de voz humana, os dados de áudio são direcionados ao motor openWakeWord para validar a emissão da palavra de ativação ("Noite"). Confirmada a ativação, a fala é encaminhada ao motor de reconhecimento faster-whisper. Para manter a execução fluida no processador i7-3770 sem instruções AVX2, o faster-whisper utiliza o modelo small ou base com precisão INT8, obtendo tempos de transcrição de cerca de 350 ms para trechos de 5 segundos de áudio. O número de threads do backend CTranslate2 deve ser configurado com inter_threads=1 e intra_threads=4 para evitar sobrecarga dos núcleos da CPU. O texto transcrito passa então pelos módulos de correção fonética legado (corrigir_palavra() e corrigir_texto()), que aplicam dicionários de substituição para corrigir erros sistemáticos do transcritor em termos como "iutub" para "youtube" ou "gugol" para "google".
+A síntese de fala é executada localmente pelo Piper TTS, utilizando o modelo em português brasileiro pt_BR-faber-medium exportado para o formato ONNX. Para assegurar o funcionamento estável do motor ONNX Runtime na CPU sem causar contenção no sistema, a síntese de voz deve ser explicitamente limitada através do parâmetro intra_op_num_threads=2. O Piper TTS gera a resposta em áudio com uma taxa de latência de cerca de 80 ms por sentença sintetizada.
+O suporte ao recurso de Barge-in (interrupção imediata da voz da assistente quando o usuário começa a falar) é controlado através de um gerenciador assíncrono de reprodução. Enquanto a assistente sintetiza e transmite áudio pelos alto-falantes, o Silero VAD continua monitorando a entrada do microfone em segundo plano. Caso o VAD identifique a voz do usuário por um período contínuo superior a 300 ms durante a emissão da resposta, o sistema aciona uma rotina de interrupção que realiza sequencialmente quatro ações:
+1. Limpa instantaneamente a fila assíncrona de blocos de áudio da biblioteca de saída de som.
+2. Reseta o buffer do dispositivo de áudio para cessar a saída física nos alto-falantes.
+3. Cancela a tarefa de síntese do Piper TTS em andamento por meio da instrução asyncio.Task.cancel().
+4. Envia a nova fala do usuário diretamente para transcrição e processamento no orquestrador.
+Arquitetura de Memória Híbrida e Persistência de Dados
+A infraestrutura de memória persistente da Noite 2.0 substitui o antigo armazenamento em arquivos JSON por um banco de dados relacional e vetorial unificado no SQLite, centralizado no arquivo local noite_core.db. A extensão sqlite-vec é incorporada para viabilizar buscas por similaridade vetorial em tabelas do próprio SQLite, enquanto o mecanismo FTS5 é utilizado para buscas textuais por palavra-chave.
+O banco de dados armazena quatro categorias fundamentais de informação, distribuídas em estruturas otimizadas:
+* Memória Episódica (Tabela episodes): Registra o histórico completo das conversas, resumos de sessões e contextos operacionais recentes.
+* Memória Semântica (Tabela facts): Armazena preferências declaradas do usuário, informações persistentes sobre o ambiente de trabalho e fatos extraídos das interações.
+* Representação Vetorial (Tabela vec_embeddings): Armazena vetores densos de 384 dimensões gerados localmente pelo modelo all-MiniLM-L6-v2 executado na CPU, correlacionando cada vetor aos registros da tabela facts.
+* Memória Procedural (Tabela skills): Mantém rotinas de automação, procedimentos operacionais e scripts de instrução. Cada habilidade registrada no banco faz referência a um arquivo Markdown correspondente armazenado no diretório /skills/, controlado por versionamento via Git.
+A recuperação contextual combina busca por palavras-chave via FTS5 e busca vetorial por similaridade de cosseno via sqlite-vec, consolidando os resultados através da seguinte pontuação híbrida:
+\text{Score} = \alpha \cdot \text{Score}_{\text{FTS5}} + (1 - \alpha) \cdot \text{Sim}_{\text{cosseno}}
+O parâmetro \alpha é configurado em 0,4, equilibrando termos exatos (como caminhos de arquivos ou nomes de comandos) com a interpretação semântica das intenções.
+Para garantir acesso concorrente sem travamentos no banco de dados durante operações assíncronas de leitura e escrita, o SQLite deve ser aberto com o modo WAL habilitado por meio do comando PRAGMA journal_mode=WAL;. Além disso, as rotinas de backup da base de dados devem utilizar a API oficial de backup do SQLite em vez de realizar cópias brutas do arquivo .db enquanto a aplicação está em execução. A identidade da assistente é preservada de forma isolada no arquivo config/persona.json, garantindo tom de voz e regras comportamentais constantes independentemente do modelo de linguagem em uso.
+Segurança, Isolamento de Processos e Integrações de Ferramentas
+A automação do sistema operando no Windows exige a adoção rigorosa do Princípio do Menor Privilégio (Principle of Least Privilege - POLP) para prevenir a execução não autorizada de comandos no computador do usuário. A execução de ferramentas é categorizada em quatro níveis de permissão distinta, estabelecendo fronteiras claras de acesso:
+Nível de Permissão
+	Escopo de Ação
+	Política de Execução
+	Exemplos de Ferramentas
+	Nível 0
+	Leitura e Consultas
+	Execução automática sem confirmação.
+	Consultar relógio, listar arquivos, ler logs do sistema.
+	Nível 1
+	Modificação Controlada
+	Execução silenciosa com registro em auditoria.
+	Criar notas, gravar preferências, salvar arquivos temporários.
+	Nível 2
+	Execução de Aplicações
+	Validação de assinaturas e parâmetros.
+	Abrir navegadores, rodar scripts Luau no Roblox, conectar ao Blender.
+	Nível 3
+	Ações Destrutivas
+	Confirmação explícita obrigatória na interface.
+	Excluir diretórios, encerrar processos de sistema, modificar registros.
+	O isolamento de processos criados pela assistente é gerenciado por meio de objetos de trabalho do Windows (Win32 Job Objects). Cada processo filho disparado pela Noite 2.0 é associado a um Job Object que restringe o consumo máximo de memória RAM, ajusta a prioridade da CPU e garante o encerramento automático dos subcomponentes em caso de falha da aplicação principal. As credenciais do usuário e chaves de API são mantidas encriptadas no Windows Credential Manager com suporte da biblioteca keyring.
+Para proteger o sistema contra ataques de injeção de prompt (Prompt Injection), todo texto proveniente de fontes não confiáveis (como documentos locais, e-mails, páginas da web ou saídas do terminal) é isolado em blocos delimitados por tags XML sanitizadas antes de ser anexado ao contexto do LLM. O sistema conta ainda com a funcionalidade "Modo Estritamente Local" (Off-Grid), ativada via interface gráfica. Quando essa opção está ativa, a camada de comunicação de rede do núcleo bloqueia todas as conexões de saída, desabilita a Camada 3 de roteamento para nuvem e impede a transmissão de telemetria ou documentos para servidores externos.
+Integração com Roblox Studio
+A integração com o ambiente de desenvolvimento Roblox Studio ocorre via protocolo MCP (Model Context Protocol) nativo. O orquestrador da Noite 2.0 estabelece uma conexão via transporte STDIO diretamente com o executável localizado em %LOCALAPPDATA%\Roblox\mcp.bat. Essa arquitetura elimina intermediários e permite inspecionar a árvore de instâncias do jogo, consultar scripts Luau, inserir modelos 3D e automatizar testes no Studio com segurança.
+Integração com Blender
+A automação do Blender é realizada por meio de um Add-on Python dedicado, instalado dentro da aplicação. Ao ser iniciado, o Add-on abre um servidor WebSocket escutando na porta local 127.0.0.1:8765. Como a API bpy do Blender não possui suporte nativo a multithreading, o Add-on recebe comandos em JSON vindos da Noite 2.0, enfileira as operações e agenda sua execução na thread principal do software através do utilitário bpy.app.timers. Essa abordagem previne exceções e falhas de memória durante a manipulação de objetos 3D.
+Conclusão e Roadmap Executivo de Implementação
+A reformulação da assistente Noite 2.0 resolve as deficiências do código legado e estabelece uma arquitetura estável, modular e eficiente para execução local no Windows. As otimizações propostas respeitam as limitações da CPU Intel Core i7-3770 (sem suporte a AVX2) e extraem o máximo rendimento da GPU GTX 1660 Super de 6 GB. A adoção do KV Cache quantizado em q8_0 assegura o funcionamento do modelo de linguagem com janelas de contexto estendidas em 3,25\text{ GB} de VRAM, enquanto a estrutura de roteamento em três camadas prioriza a execução determinística para entregar latência inferior a 10\text{ ms} em tarefas operacionais.
+Fase do Roadmap
+	Escopo de Desenvolvimento
+	Entregáveis Técnicos Principais
+	Critério de Aceite e Homologação
+	Fase 1
+	Núcleo Assíncrono & Limpeza
+	Migração para PySide6/Qt6 com qasync, remoção de playsound e substituição do Tkinter.
+	Interface gráfica operacional sem travamentos na thread principal.
+	Fase 2
+	Model Gateway & VRAM
+	Configuração do LiteLLM, Ollama com Qwen 2.5 3B Q4_K_M e OLLAMA_KV_CACHE_TYPE=q8_0.
+	Uso de VRAM em repouso < 3,5\text{ GB} com contexto de 16.384\text{ tokens}.
+	Fase 3
+	Persistência & Memória
+	Base SQLite unificada (noite_core.db) integrada com extensores FTS5 e sqlite-vec.
+	Busca híbrida funcional com tempo de recuperação contextual < 50\text{ ms}.
+	Fase 4
+	Pipeline de Voz Local
+	Implementação do Silero VAD, openWakeWord, faster-whisper INT8 e Piper TTS com Barge-in.
+	Latência de áudio < 500\text{ ms} sem estouro de uso de CPU em hardware sem AVX2.
+	Fase 5
+	Integrações de Ferramentas
+	Conector Roblox Studio MCP (STDIO) e Add-on Blender WS via bpy.app.timers.
+	Manipulação de instâncias e objetos 3D em ambos os softwares via comandos de voz.
+	Fase 6
+	Segurança & Homologação
+	Isolamento Win32 Job Objects, chave Off-Grid e execução de 50 testes no pytest.
+	100\% de aprovação na suíte de testes e zero vazamentos de credenciais.
+	Com a execução desse cronograma técnico, a assistente Noite 2.0 atinge um patamar produtivo de confiabilidade, combinando privacidade, resposta tátil em tempo real e capacidade de expansão para automações complexas.
+Referências citadas
+1. ctranslate2 - PyPI, https://pypi.org/project/ctranslate2/1.20.1/ 2. Building ERROR: No matching distribution found for onnxruntime<2, https://github.com/OHF-Voice/piper1-gpl/issues/67 3. CTranslate2 is a C++ library designed to run Transformer ... - GitHub, https://github.com/miyako/CTranslate2 4. Performance tips — CTranslate2 4.8.4 documentation - OpenNMT, https://opennmt.net/CTranslate2/performance.html 5. Adaptive KV Cache Streaming: Implementation Approach, Scope, https://github.com/ggml-org/llama.cpp/discussions/28216 6. Optimize llama.cpp for speed and memory - Tokios, https://docs.tokios.com/guides/llama-cpp-optimization 7. llama.cpp KV Cache Quantization: Which -ctk and - sotaaz, https://sotaaz.com/post/llamacpp-kv-cache-quantization-guide-en 8. llama.cpp KV Cache Quantization (2026): Start With q8_0, https://openclawdc.com/blog/kv-cache-quantization-q8-vs-q4-vram/ 9. Restrict CPU core usage on linux in python program using Piper, https://stackoverflow.com/questions/79120568/restrict-cpu-core-usage-on-linux-in-python-program-using-piper-tts-library 10. Piper TTS Review: Fast, Local Neural Text-to-Speech - PromptQuorum, https://www.promptquorum.com/power-local-llm/piper-tts-review 11. sqlite-vec - PyPI, https://pypi.org/project/sqlite-vec/ 12. CTranslate2 - Fast inference engine for Transformer models - GitHub, https://github.com/opennmt/ctranslate2
