@@ -150,3 +150,39 @@ prometer "undo" ao usuário.
 4. **Recovery** — classe de reversibilidade declarada por ferramenta (tabela acima).
 
 Referência de decisão: [ADR-003](ADR/003-tool-authorization.md).
+
+## Comparação com a branch de auditoria (2026-11-01)
+
+Fonte comparada: `origin/audit/local-snapshot-2026-11-01` (`b125fa1`, base
+`0b9ca3a`), confrontada com a linha de trabalho atual.
+
+**Conteúdo da branch:** 19 arquivos, +5.050 linhas, **todos artefatos** sob
+`audit-expanded/` e `audit-snapshots/` — diffs de revisão, cópias de `src/` e
+`tests/` como texto, `working-tree.diff`, `git-status.txt`, `validation-report.txt`
+e um zip em base64. **Nenhuma alteração em `src/` ou `tests/` reais** (a
+varredura por caminhos `^(src|tests)/` retorna vazio).
+
+### Achados propostos x estado do código atual
+
+| Achado da revisão | Estado na linha atual |
+|---|---|
+| Redação de URL com userinfo, incluindo IPv6 malformado | implementado (`_redact_url`); verificado: `http://user:s3nh4@[::1/x` → `http://[REDACTED]@[::1/x` |
+| `Bearer`, `Basic` e bloco de chave privada | implementado (`_BEARER_VALUE`, `_BASIC_VALUE`, `_PRIVATE_KEY_BLOCK`) |
+| Segredo em atribuição, com aspas e comentário | implementado (`_SECRET_VALUE`, `_QUOTED_SECRET`, `_redact_sensitive_assignments`) |
+| Parâmetro sensível em query string | implementado (`_is_sensitive_query_key` via `urlsplit`) |
+
+### Decisão
+
+**Não integrar a árvore da branch de auditoria ao produto.** O merge é
+mecanicamente possível (sem conflitos), mas adicionaria 19 dumps duplicados e
+zero código — violaria a regra "isso torna a Noite melhor?". A branch permanece
+publicada como prova de revisão; o conteúdo equivalente já está em
+`src/noite/workspace.py` desde o baseline `76d7c91`.
+
+### Branches comparadas
+
+| Branch | Relação | Ação |
+|---|---|---|
+| `codex/stabilize-core` (`0b9ca3a`) | **ancestral** da linha atual | nada a integrar; PR #1 fica obsoleto |
+| `audit/local-snapshot-2026-11-01` (`b125fa1`) | 19 commits à frente, só artefatos | não integrar (acima) |
+| `main` (`813a350`) | 24 à frente / 3 atrás | 3 commits só removem `.env.example`, um zip de revisão e o binário `ia`; **não mesclar sem decisão** porque o README instrui copiar `.env.example` |
