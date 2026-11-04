@@ -7,7 +7,8 @@ from pathlib import Path
 
 from .models import Capability, PermissionProfile
 
-_RESTRICTED_CAPABILITIES = {Capability.FILE_READ, Capability.FILE_WRITE}
+# Single source of truth for the read/write-only profile used by the core and the UI.
+RESTRICTED_CAPABILITIES = frozenset({Capability.FILE_READ, Capability.FILE_WRITE})
 
 
 class PermissionManager:
@@ -39,7 +40,7 @@ class PermissionManager:
         if self.profile == PermissionProfile.NONE:
             return False
         if self.profile == PermissionProfile.RESTRICTED:
-            return capability in self.enabled and capability in _RESTRICTED_CAPABILITIES
+            return capability in self.enabled and capability in RESTRICTED_CAPABILITIES
         return capability in self.enabled
 
     def save_from_user(
@@ -50,7 +51,7 @@ class PermissionManager:
         if profile == PermissionProfile.NONE:
             normalized.clear()
         elif profile == PermissionProfile.RESTRICTED:
-            normalized.intersection_update(_RESTRICTED_CAPABILITIES)
+            normalized.intersection_update(RESTRICTED_CAPABILITIES)
         payload = {
             "schema_version": 1,
             "profile": profile.value,

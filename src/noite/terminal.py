@@ -149,7 +149,10 @@ def is_destructive_command(command: str) -> bool:
 def _workspace_path(token: str, cwd: Path) -> Path:
     if not _SAFE_TOKEN.fullmatch(token) or token.startswith(("/", "\\", "-")):
         raise TerminalCommandError("Use um caminho relativo simples dentro do workspace.")
-    candidate = (cwd / token).resolve(strict=True)
+    try:
+        candidate = (cwd / token).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise TerminalCommandError("O caminho precisa existir dentro do workspace.") from exc
     try:
         candidate.relative_to(cwd)
     except ValueError as exc:
@@ -189,11 +192,9 @@ def validate_terminal_command(
             raise TerminalCommandError("O padrão de busca excede 256 caracteres.")
         if verb == "select-string" and arguments[0].startswith("-"):
             raise TerminalCommandError("O padrão precisa ser texto simples, não um parâmetro.")
-        path_tokens = (
-            arguments if verb == "select-string" else arguments
-        )
         if cwd is not None:
-            for token in path_tokens[-1:] if verb == "select-string" else path_tokens:
+            path_tokens = arguments[-1:] if verb == "select-string" else arguments
+            for token in path_tokens:
                 _workspace_path(token, cwd)
     return normalized
 

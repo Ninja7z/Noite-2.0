@@ -30,6 +30,17 @@ BLOCKED_NAMES = {
 }
 BLOCKED_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
 BLOCKED_DIRECTORIES = {".ssh", ".aws", ".azure", ".gnupg"}
+IGNORED_DIRECTORIES = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+}
 _SECRET_VALUE = re.compile(
     r"(?im)(\b[A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|TOKEN|SECRET|PASSWORD|"
     r"CREDENTIALS?|AUTHORIZATION)[A-Z0-9_]*)"
@@ -205,17 +216,6 @@ def search_workspace_text(
     needle = query.strip()
     if not needle or len(needle) > 200:
         raise ValueError("Digite um termo de pesquisa de 1 a 200 caracteres.")
-    ignored = {
-        ".git",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".venv",
-        "__pycache__",
-        "build",
-        "dist",
-        "node_modules",
-    }
     matches: list[SearchMatch] = []
     files_scanned = 0
     bytes_scanned = 0
@@ -228,7 +228,7 @@ def search_workspace_text(
         directories[:] = [
             name
             for name in directories
-            if name.casefold() not in ignored
+            if name.casefold() not in IGNORED_DIRECTORIES
             and not _is_sensitive(current_path / name)
             and not (current_path / name).is_symlink()
             and _is_within_workspace(current_path / name, root)
@@ -286,17 +286,6 @@ def retrieve_workspace_context(
     budget = max(0, min(max_chars, MAX_PROJECT_CONTEXT_CHARS))
     if not budget:
         return ""
-    ignored = {
-        ".git",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".venv",
-        "__pycache__",
-        "build",
-        "dist",
-        "node_modules",
-    }
     terms = {
         term.casefold()
         for term in re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}", query)
@@ -328,7 +317,7 @@ def retrieve_workspace_context(
             directories[:] = [
                 name
                 for name in directories
-                if name.casefold() not in ignored
+                if name.casefold() not in IGNORED_DIRECTORIES
                 and not _is_sensitive(current_path / name)
                 and not (current_path / name).is_symlink()
                 and _is_within_workspace(current_path / name, root)
@@ -362,16 +351,19 @@ def retrieve_workspace_context(
                 if b"\0" in raw:
                     continue
                 try:
-                    content = _redact_secret_values(raw.decode("utf-8-sig"))
+                    content = raw.decode("utf-8-sig")
                 except UnicodeDecodeError:
                     continue
-                folded = content.casefold()
-                score = sum(folded.count(term) for term in terms)
+                score = sum(content.casefold().count(term) for term in terms)
                 if not score:
                     continue
+                # Redaction runs over the whole file only when it becomes evidence;
+                # scanning every candidate would cost several regex passes per file.
+                content = _redact_secret_values(content)
                 excerpts = []
                 for line_number, line in enumerate(content.splitlines(), start=1):
-                    if any(term in line.casefold() for term in terms):
+                    folded_line = line.casefold()
+                    if any(term in folded_line for term in terms):
                         excerpts.append(f"{line_number}: {line[:300]}")
                     if len(excerpts) >= 8:
                         break
