@@ -3052,7 +3052,9 @@ class MCPDialog(QDialog):
         policy_decision = policy.evaluate(action_request)
         if policy_decision.decision == DecisionKind.DENY:
             audit_logger.record(action_request, policy_decision)
-            QMessageBox.warning(self, "Permissão negada", policy_decision.reason)
+            # Report inline instead of opening a blocking modal: the denial is already
+            # audited and the dialog must stay responsive to the user.
+            self.result.setPlainText(f"Permissão negada: {policy_decision.reason}")
             return
         audit_logger.record(action_request, policy_decision)
         command = str(config["command"])

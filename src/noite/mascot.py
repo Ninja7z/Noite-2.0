@@ -299,6 +299,7 @@ class MascotWindow(QWidget):
         self._drag_offset: QPoint | None = None
         self._close_pending = False
         self._streamed_any = False
+        self._pending_chunks: list[str] = []
         self._state = "idle"
         self.setObjectName("noiteMascotWindow")
         self.setWindowTitle("Noite 2.0")
@@ -313,6 +314,12 @@ class MascotWindow(QWidget):
         self.diagnostics_timer = QTimer(self)
         self.diagnostics_timer.timeout.connect(self.refresh_diagnostics)
         self.diagnostics_timer.stop()
+        # Streaming is batched: repainting and scrolling the transcript once per
+        # token makes long answers feel slower than the model actually is.
+        self._chunk_timer = QTimer(self)
+        self._chunk_timer.setSingleShot(True)
+        self._chunk_timer.setInterval(50)
+        self._chunk_timer.timeout.connect(self._flush_chunks)
         self._restore_position()
         self._set_state("idle")
         # Qt's offscreen platform is used by automated tests; don't register
@@ -529,12 +536,21 @@ class MascotWindow(QWidget):
 
     def _receive_chunk(self, chunk: str) -> None:
         self._streamed_any = True
+        self._pending_chunks.append(chunk)
+        if not self._chunk_timer.isActive():
+            self._chunk_timer.start()
+        self._set_state("working")
+
+    def _flush_chunks(self) -> None:
+        if not self._pending_chunks:
+            return
+        chunk = "".join(self._pending_chunks)
+        self._pending_chunks.clear()
         cursor = self.transcript.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         cursor.insertText(chunk)
         self.transcript.setTextCursor(cursor)
         self.transcript.ensureCursorVisible()
-        self._set_state("working")
 
     def _receive_activity(self, event: ActivityEvent) -> None:
         if event.state == "started":
@@ -545,11 +561,12 @@ class MascotWindow(QWidget):
             self._set_state("working")
 
     def _request_completed(self, answer: str) -> None:
+        self._chunk_timer.stop()
+        self._flush_chunks()
         if not self._streamed_any:
             cursor = self.transcript.textCursor()
             cursor.movePosition(cursor.MoveOperation.End)
             cursor.insertText(answer)
-        # Removido: self.transcript.append("</p>")
         self.transcript.ensureCursorVisible()
         self._set_state("done")
         QTimer.singleShot(
@@ -558,6 +575,8 @@ class MascotWindow(QWidget):
         )
 
     def _request_failed(self, message: str) -> None:
+        self._chunk_timer.stop()
+        self._flush_chunks()
         self.transcript.append(f'<p style="color:#ff8aa1">{html.escape(message)}</p>')
         self._set_state("error")
 

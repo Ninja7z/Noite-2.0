@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -349,6 +351,16 @@ def test_moon_icon_is_multiresolution_and_loadable(app):
     assert {(16, 16), (32, 32), (48, 48), (256, 256)} <= sizes
 
 
+def _grant_mcp_access(data_dir) -> None:
+    """MCP is default-deny: simulate the user granting access in settings."""
+    security = Path(data_dir) / "security"
+    security.mkdir(parents=True, exist_ok=True)
+    (security / "permissions.json").write_text(
+        json.dumps({"schema_version": 1, "profile": "full", "enabled": ["mcp.call"]}),
+        encoding="utf-8",
+    )
+
+
 def test_mcp_call_requires_explicit_approval(app, tmp_path, monkeypatch):
     from PySide6.QtWidgets import QMessageBox
 
@@ -365,11 +377,44 @@ def test_mcp_call_requires_explicit_approval(app, tmp_path, monkeypatch):
     dialog.tools.addItem(item)
     dialog.tools.setCurrentItem(item)
     dialog.arguments_input.setPlainText('{"path":"notes.txt"}')
+    _grant_mcp_access(tmp_path)
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.No)
 
     dialog._call_selected()
 
     assert dialog.worker is None
+
+
+def test_mcp_call_without_permission_is_denied_and_never_executed(app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from noite import mcp_client
+
+    executed = []
+
+    async def fake_call(self, server, name, arguments, input_schema=None):
+        executed.append(name)
+        return ["should not run"]
+
+    monkeypatch.setattr(mcp_client.MCPClient, "call_tool", fake_call)
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+    dialog = MCPDialog(tmp_path)
+    config = {"command": "configured-server", "args": []}
+    dialog.servers = {"example": config}
+    dialog._save_servers()
+    dialog._approved["example"] = dialog._server_fingerprint(config)
+    dialog._refresh_servers()
+    item = QListWidgetItem("write_file")
+    item.setData(Qt.UserRole, {"name": "write_file", "input_schema": {}})
+    dialog.tools.addItem(item)
+    dialog.tools.setCurrentItem(item)
+    dialog.arguments_input.setPlainText('{"path":"notes.txt"}')
+
+    dialog._call_selected()
+
+    assert dialog.worker is None
+    assert executed == []
+    assert "Permissão negada" in dialog.result.toPlainText()
 
 
 def test_approved_mcp_call_runs_only_selected_tool(app, tmp_path, monkeypatch):
@@ -389,6 +434,7 @@ def test_approved_mcp_call_runs_only_selected_tool(app, tmp_path, monkeypatch):
         return ["completed"]
 
     monkeypatch.setattr(mcp_client.MCPClient, "call_tool", fake_call)
+    _grant_mcp_access(tmp_path)
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
     dialog = MCPDialog(tmp_path)
     dialog.servers = {"example": {"command": "configured-server", "args": ["--stdio"]}}
@@ -410,7 +456,9 @@ def test_approved_mcp_call_runs_only_selected_tool(app, tmp_path, monkeypatch):
 
     dialog._call_selected()
     deadline = time.monotonic() + 5
-    while not done.is_set() and time.monotonic() < deadline:
+    while "Dados não confiáveis" not in dialog.result.toPlainText():
+        if time.monotonic() >= deadline:
+            break
         app.processEvents()
         time.sleep(0.01)
     app.processEvents()
@@ -484,6 +532,7 @@ def test_mcp_configuration_change_while_confirmation_is_open_aborts_call(
         )
         return QMessageBox.Yes
 
+    _grant_mcp_access(tmp_path)
     monkeypatch.setattr(QMessageBox, "question", alter_config_during_approval)
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[1]))
 
