@@ -86,18 +86,20 @@ def test_high_risk_action_requires_approval(tmp_path):
 def test_approval_is_bound_to_exact_arguments_and_single_use():
     approvals = ApprovalManager()
     request = _request(RiskLevel.R2)
-    token = approvals.approve_from_ui(request)
+    session_id = "test-session"
+    token = approvals.approve_from_ui(request, session_id)
     changed = request.model_copy(update={"arguments": {"value": "different"}})
-    assert not approvals.consume(changed, token)
-    assert not approvals.consume(request, token)
+    assert not approvals.consume(changed, token, session_id)
+    assert not approvals.consume(request, token, session_id)
 
 
 def test_approval_token_is_single_use():
     approvals = ApprovalManager()
     request = _request(RiskLevel.R2)
-    token = approvals.approve_from_ui(request)
-    assert approvals.consume(request, token)
-    assert not approvals.consume(request, token)
+    session_id = "test-session"
+    token = approvals.approve_from_ui(request, session_id)
+    assert approvals.consume(request, token, session_id)
+    assert not approvals.consume(request, token, session_id)
 
 
 def test_tool_guard_blocks_before_executor_when_not_authorized(tmp_path):
@@ -146,10 +148,16 @@ def test_tool_guard_requires_exact_human_approval_for_high_risk(tmp_path):
         PolicyEngine(manager), approvals, AuditLogger(tmp_path / "audit.sqlite3")
     )
     request = _request(RiskLevel.R2)
+    session_id = "test-session"
     with pytest.raises(ToolDenied):
-        guard.execute(request, lambda **kwargs: "should not run")
-    token = approvals.approve_from_ui(request)
-    assert guard.execute(request, lambda **kwargs: "approved", approval_token=token) == "approved"
+        guard.execute(request, lambda **kwargs: "should not run", session_id=session_id)
+    token = approvals.approve_from_ui(request, session_id)
+    assert (
+        guard.execute(
+            request, lambda **kwargs: "approved", approval_token=token, session_id=session_id
+        )
+        == "approved"
+    )
 
 
 def test_revoked_permission_blocks_even_after_approval(tmp_path):
@@ -160,10 +168,16 @@ def test_revoked_permission_blocks_even_after_approval(tmp_path):
         PolicyEngine(manager), approvals, AuditLogger(tmp_path / "audit.sqlite3")
     )
     request = _request(RiskLevel.R2)
-    token = approvals.approve_from_ui(request)
+    session_id = "test-session"
+    token = approvals.approve_from_ui(request, session_id)
     manager.save_from_user(PermissionProfile.NONE, set())
     with pytest.raises(ToolDenied):
-        guard.execute(request, lambda **kwargs: "should not run", approval_token=token)
+        guard.execute(
+            request,
+            lambda **kwargs: "should not run",
+            approval_token=token,
+            session_id=session_id,
+        )
 
 
 def test_audit_does_not_store_raw_arguments(tmp_path):
@@ -199,3 +213,75 @@ def test_path_guard_rejects_symlink_when_supported(tmp_path):
         pytest.skip("Symlink creation is unavailable")
     with pytest.raises(ValueError, match="Links simbólicos"):
         resolve_allowed_path(workspace, "linked/secret.txt")
+
+
+def test_expired_approvals_are_pruned(monkeypatch):
+    import time
+
+    from noite.security import approval_manager as approval_module
+
+    approvals = ApprovalManager(ttl_seconds=10)
+    request = _request(RiskLevel.R2)
+    session_id = "test-session"
+    stale = approvals.approve_from_ui(request, session_id)
+    future = time.monotonic() + 3600
+    monkeypatch.setattr(approval_module.time, "monotonic", lambda: future)
+
+    fresh = approvals.approve_from_ui(request, session_id)
+
+    assert len(approvals._grants) == 1
+    assert not approvals.consume(request, stale, session_id)
+    assert approvals.consume(request, fresh, session_id)
+
+
+def test_profile_allows_uses_the_single_documented_order():
+    from noite.security import PROFILE_ORDER, profile_allows
+
+    assert PROFILE_ORDER == (
+        PermissionProfile.NONE,
+        PermissionProfile.RESTRICTED,
+        PermissionProfile.FULL,
+    )
+    assert profile_allows(PermissionProfile.RESTRICTED, PermissionProfile.RESTRICTED)
+    assert profile_allows(PermissionProfile.RESTRICTED, PermissionProfile.FULL)
+    assert not profile_allows(PermissionProfile.FULL, PermissionProfile.RESTRICTED)
+    assert not profile_allows(PermissionProfile.RESTRICTED, PermissionProfile.NONE)
+
+
+def test_execution_status_is_recorded_per_attempt(tmp_path):
+    manager = PermissionManager(tmp_path / "permissions.json")
+    manager.save_from_user(PermissionProfile.FULL, {Capability.FILE_READ})
+    audit = AuditLogger(tmp_path / "audit.sqlite3")
+    guard = ToolGuard(PolicyEngine(manager), ApprovalManager(), audit)
+    request = _request()
+
+    def boom(**kwargs):
+        raise RuntimeError("falha simulada")
+
+    with pytest.raises(RuntimeError):
+        guard.execute(request, boom)
+    assert guard.execute(request, lambda **kwargs: "ok") == "ok"
+
+    assert [row["execution_status"] for row in audit.recent()] == ["succeeded", "failed"]
+
+
+def test_tool_guard_audits_async_cancellation(tmp_path):
+    import asyncio
+
+    manager = PermissionManager(tmp_path / "permissions.json")
+    manager.save_from_user(PermissionProfile.FULL, {Capability.FILE_READ})
+    audit = AuditLogger(tmp_path / "audit.sqlite3")
+    guard = ToolGuard(PolicyEngine(manager), ApprovalManager(), audit)
+
+    async def long_executor(**kwargs):
+        await asyncio.sleep(30)
+
+    async def run_and_cancel():
+        task = asyncio.create_task(guard.execute(_request(), long_executor))
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run_and_cancel())
+    assert audit.recent()[0]["execution_status"] == "cancelled"

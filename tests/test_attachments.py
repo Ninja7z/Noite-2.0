@@ -67,6 +67,32 @@ def test_extracts_docx_without_executing_document(tmp_path):
     assert extract_attachment(path).text == "Olá"
 
 
+def test_docx_rejects_dtd_and_external_entity_declarations(tmp_path):
+    path = tmp_path / "hostile.docx"
+    payload = (
+        '<!DOCTYPE w:document [<!ENTITY xxe SYSTEM "file:///C:/Windows/win.ini">]>'
+        '<w:document xmlns:w="urn:w"><w:p><w:r><w:t>&xxe;</w:t></w:r></w:p></w:document>'
+    )
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("word/document.xml", payload)
+
+    with pytest.raises(AttachmentError, match="DTD ou entidades XML"):
+        extract_attachment(path)
+
+
+def test_office_xml_rejects_utf16_encoded_dtd_payload():
+    from noite.attachments import _parse_office_xml
+
+    payload = (
+        '<?xml version="1.0" encoding="UTF-16"?>'
+        '<!DOCTYPE root [<!ENTITY xxe SYSTEM "file:///C:/Windows/win.ini">]>'
+        '<root>&xxe;</root>'
+    ).encode("utf-16")
+
+    with pytest.raises(AttachmentError, match="DTD ou entidades XML"):
+        _parse_office_xml(payload)
+
+
 def test_extracts_xlsx_shared_strings(tmp_path):
     path = tmp_path / "sheet.xlsx"
     with zipfile.ZipFile(path, "w") as archive:

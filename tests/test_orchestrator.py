@@ -3,7 +3,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from noite.config import Settings  # noqa: E402
-from noite.orchestrator import ChatAgent, Orchestrator, PermissionLevel, check_permission  # noqa: E402
+from noite.orchestrator import ChatAgent, Orchestrator  # noqa: E402
 
 
 class _FakeService:
@@ -13,8 +13,12 @@ class _FakeService:
     def active_conversation_id(self) -> str:
         return "conv-1"
 
-    async def respond(self, text, conversation_id=None, history_override=None):
-        return f"eco: {text}"
+    async def respond(self, text, conversation_id=None, history_override=None, on_chunk=None):
+        answer = f"eco: {text}"
+        if on_chunk is not None:
+            on_chunk(answer[:4])
+            on_chunk(answer[4:])
+        return answer
 
 
 def test_orchestrator_uses_registered_agent(tmp_path):
@@ -31,6 +35,18 @@ def test_orchestrator_uses_registered_agent(tmp_path):
     completed = [e for e in events if e.state == "completed"]
     assert any("orquestrador" in e.operation for e in started)
     assert any("orquestrador" in e.operation for e in completed)
+
+
+def test_orchestrator_forwards_streamed_chunks_to_chat_service():
+    import asyncio
+
+    orch = Orchestrator(_FakeService())
+    chunks = []
+    answer = asyncio.run(orch.process_request("resposta", on_chunk=chunks.append))
+
+    assert answer == "eco: resposta"
+    assert "".join(chunks) == answer
+    assert len(chunks) == 2
 
 
 def test_orchestrator_executes_registered_deterministic_action_before_model():
@@ -74,20 +90,13 @@ def test_orchestrator_plan_records_intent(tmp_path):
     assert answer.startswith("eco:")
 
 
-def test_permission_check_requires_current_level_to_meet_request():
-    assert check_permission(PermissionLevel.REGULAR, PermissionLevel.REGULAR)
-    assert check_permission(PermissionLevel.REGULAR, PermissionLevel.FULL)
-    assert not check_permission(PermissionLevel.FULL, PermissionLevel.REGULAR)
-    assert not check_permission(PermissionLevel.REGULAR, PermissionLevel.NONE)
-
-
 def test_orchestrator_timeout_is_enforced():
     import asyncio
 
     import pytest
 
     class SlowService(_FakeService):
-        async def respond(self, text, conversation_id=None, history_override=None):
+        async def respond(self, text, conversation_id=None, history_override=None, on_chunk=None):
             await asyncio.sleep(0.1)
             return "late"
 

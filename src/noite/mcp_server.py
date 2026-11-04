@@ -2,15 +2,43 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
 from pathlib import Path
+from uuid import uuid4
 
+from dotenv import load_dotenv
+from mcp.server.auth.provider import AccessToken
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 
 from .assistant import AssistantService
 from .tools import search_workspace
 
+load_dotenv()
+
 MAX_PROMPT_CHARS = 4_000
 MAX_RESPONSE_CHARS = 12_000
+MCP_HOST = "127.0.0.1"
+MCP_PORT = int(os.getenv("NOITE_MCP_PORT", "8767"))
+MCP_AUTH_TOKEN = os.getenv("NOITE_MCP_AUTH_TOKEN", "").strip()
+
+
+class _StaticTokenVerifier:
+    """Fail-closed bearer-token verifier for this local-only MCP endpoint."""
+
+    def __init__(self, expected_token: str) -> None:
+        self._expected_token = expected_token
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        if not self._expected_token or not secrets.compare_digest(token, self._expected_token):
+            return None
+        return AccessToken(
+            token=token,
+            client_id="noite-local",
+            scopes=["noite"],
+            resource=f"http://{MCP_HOST}:{MCP_PORT}",
+        )
+
 
 service = AssistantService()
 _request_lock = asyncio.Lock()
@@ -24,11 +52,18 @@ mcp = FastMCP(
         "nomes de arquivos no workspace configurado; não lê nem altera arquivos. "
         "Nenhuma ferramenta deste servidor executa comandos do sistema ou modifica arquivos."
     ),
-    host=os.getenv("NOITE_MCP_HOST", "127.0.0.1"),
-    port=int(os.getenv("NOITE_MCP_PORT", "8767")),
+    host=MCP_HOST,
+    port=MCP_PORT,
     streamable_http_path="/mcp",
     stateless_http=True,
     json_response=True,
+    auth=AuthSettings(
+        issuer_url=f"http://{MCP_HOST}:{MCP_PORT}",
+        resource_server_url=f"http://{MCP_HOST}:{MCP_PORT}",
+        required_scopes=["noite"],
+        validate_token_resource=True,
+    ),
+    token_verifier=_StaticTokenVerifier(MCP_AUTH_TOKEN),
 )
 
 
@@ -67,10 +102,19 @@ async def noite_ask(prompt: str) -> str:
         raise ValueError("A pergunta não pode estar vazia.")
     if len(clean_prompt) > MAX_PROMPT_CHARS:
         raise ValueError(f"A pergunta excede o limite de {MAX_PROMPT_CHARS} caracteres.")
+    # Each MCP invocation is isolated. A fixed ID would mix history across
+    # Open WebUI chats and users because MCP calls do not share chat state.
+    conversation_id = f"mcp-openwebui-{uuid4().hex}"
     async with _request_lock:
-        answer = await service.respond(clean_prompt, conversation_id="mcp-openwebui")
+        try:
+            answer = await service.respond(clean_prompt, conversation_id=conversation_id)
+        finally:
+            # The chat UI owns its history; this tool is a stateless sub-call.
+            await asyncio.to_thread(service.delete_conversation, conversation_id)
     return answer[:MAX_RESPONSE_CHARS]
 
 
 if __name__ == "__main__":
+    if not MCP_AUTH_TOKEN:
+        raise RuntimeError("Defina NOITE_MCP_AUTH_TOKEN antes de iniciar o servidor MCP HTTP.")
     mcp.run(transport="streamable-http")

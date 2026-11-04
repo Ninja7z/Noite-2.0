@@ -277,10 +277,26 @@ def recent_messages(
 
 
 def search_messages(connection: sqlite3.Connection, query: str, limit: int = 10) -> list[str]:
-    terms = [term for term in query.split() if term]
-    if not terms:
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("O limite de resultados deve ficar entre 1 e 100.")
+    if len(query) > 512:
+        raise ValueError("A consulta de busca excede 512 caracteres.")
+    # Split and filter terms, escaping FTS5 special characters
+    # FTS5 special chars: - * ( ) " ' NEAR NOT OR AND
+    raw_terms = [term for term in query.split() if term]
+    if len(raw_terms) > 20:
+        raise ValueError("A consulta de busca pode conter no máximo 20 termos.")
+    if not raw_terms:
         return []
-    match_query = " AND ".join('"' + term.replace('"', '""') + '"' for term in terms)
+    # Escape each term for FTS5: quote and escape internal quotes
+    # Also prefix with ^ to match term at start (optional, but safer)
+    safe_terms = []
+    for term in raw_terms:
+        # Escape double quotes by doubling them
+        escaped = term.replace('"', '""')
+        # Wrap in double quotes to treat as phrase
+        safe_terms.append(f'"{escaped}"')
+    match_query = " AND ".join(safe_terms)
     rows = connection.execute(
         "SELECT messages.content FROM messages_fts "
         "JOIN messages ON messages.id = messages_fts.rowid "

@@ -93,19 +93,9 @@ from .config import get_settings
 from .hf_catalog import search_huggingface_models
 from .ide import ProjectDock
 from .logging_setup import setup_logging
-from .security import (
-    ActionRequest,
-    ApprovalManager,
-    AuditLogger,
-    Capability,
-    DecisionKind,
-    PermissionManager,
-    PolicyEngine,
-    RiskLevel,
-    ToolGuard,
-)
+from .security import DecisionKind, GuardedTools
 from .security.settings_dialog import SecuritySettingsDialog
-from .terminal import is_destructive_command, run_terminal_command
+from .terminal import is_destructive_command
 from .theme import DARK_THEME, LIGHT_THEME, UI_TOKENS, chat_document_styles
 
 logger = logging.getLogger("noite.ui")
@@ -346,6 +336,8 @@ class NoiteWindow(QMainWindow):
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.settings = get_settings()
+        # Single authorized path for tool execution from the desktop UI.
+        self.guarded_tools = GuardedTools(Path(self.settings.data_dir))
         self.preferences = QSettings("Noite", "Noite 2.0")
         self._theme_mode = str(self.preferences.value("appearance/theme", "dark"))
         self._sidebar_position = "left"
@@ -1588,6 +1580,25 @@ class NoiteWindow(QMainWindow):
                 self, "Terminal", "Abra um workspace antes de executar comandos."
             )
             return
+        request = self.guarded_tools.terminal_request(
+            command, workspace, advanced=self._terminal_advanced
+        )
+        decision = self.guarded_tools.evaluate(request)
+        if decision.decision == DecisionKind.DENY:
+            self.guarded_tools.record(request, decision)
+            self.terminal_output.appendPlainText(
+                f"[Permissão negada] {decision.reason}\n"
+                "Ajuste em Configurações > Segurança e permissões para liberar o terminal."
+            )
+            self._record_activity(
+                make_activity_event(
+                    "Terminal",
+                    "failed",
+                    "Execução bloqueada pela política",
+                    details=decision.reason,
+                )
+            )
+            return
         if self._terminal_advanced or is_destructive_command(command):
             title = (
                 "Confirmar execução avançada"
@@ -1609,6 +1620,11 @@ class NoiteWindow(QMainWindow):
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return
+        approval_token = (
+            self.guarded_tools.approve_from_ui(request)
+            if decision.decision == DecisionKind.REQUIRE_APPROVAL
+            else None
+        )
         self.terminal_output.appendPlainText(f"PS {workspace}> {command}")
         self._terminal_last_result = None
         self.terminal_to_chat_button.setEnabled(False)
@@ -1621,10 +1637,11 @@ class NoiteWindow(QMainWindow):
         worker = None
 
         def execute(current_worker: TaskThread):
-            return run_terminal_command(
+            return self.guarded_tools.run_terminal(
                 command,
                 workspace,
                 advanced=self._terminal_advanced,
+                approval_token=approval_token,
                 cancel_event=current_worker._cancel_requested,
                 on_output=current_worker.streamed.emit,
             )
@@ -2699,6 +2716,7 @@ class MCPDialog(QDialog):
         super().__init__(parent)
         self.data_dir = Path(data_dir)
         self.config_path = self.data_dir / "mcp_servers.json"
+        self.guarded_tools = GuardedTools(self.data_dir)
         self._approved: dict[str, str] = {}
         self._load_notice = ""
         self.servers: dict[str, dict[str, object]] = self._load_servers()
@@ -3020,8 +3038,16 @@ class MCPDialog(QDialog):
                 self, "Seleção necessária", "Escolha um servidor e uma ferramenta."
             )
             return
+        raw_arguments = self.arguments_input.toPlainText()
+        if len(raw_arguments) > 16_000:
+            QMessageBox.warning(
+                self,
+                "Argumentos MCP inválidos",
+                "Os argumentos excedem 16.000 caracteres.",
+            )
+            return
         try:
-            arguments = json.loads(self.arguments_input.toPlainText())
+            arguments = json.loads(raw_arguments)
         except json.JSONDecodeError:
             QMessageBox.warning(
                 self, "JSON inválido", "Os argumentos precisam ser um objeto JSON válido."
@@ -3031,30 +3057,27 @@ class MCPDialog(QDialog):
             QMessageBox.warning(self, "JSON inválido", "Os argumentos precisam ser um objeto JSON.")
             return
         tool = item.data(Qt.UserRole)
+        from .mcp_client import _validate_tool_arguments, _validate_tool_schema
+
+        try:
+            _validate_tool_arguments(arguments)
+            input_schema = tool.get("input_schema")
+            if input_schema is not None:
+                _validate_tool_schema(input_schema)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Argumentos MCP inválidos", str(exc))
+            return
         config = self.servers[name]
         if not self._server_is_approved(name, config):
             self._warn_configuration_changed()
             return
-        security_dir = self.data_dir / "security"
-        permission_manager = PermissionManager(security_dir / "permissions.json")
-        approval_manager = ApprovalManager()
-        audit_logger = AuditLogger(security_dir / "audit.sqlite3")
-        policy = PolicyEngine(permission_manager)
-        action_request = ActionRequest(
-            actor="user",
-            tool="mcp",
-            capability=Capability.MCP,
-            operation="call_tool",
-            resource=f"{name}/{tool['name']}",
-            arguments=arguments,
-            risk=RiskLevel.R2,
-        )
-        policy_decision = policy.evaluate(action_request)
+        request = self.guarded_tools.mcp_request(name, str(tool["name"]), arguments)
+        policy_decision = self.guarded_tools.evaluate(request)
         if policy_decision.decision == DecisionKind.DENY:
-            audit_logger.record(action_request, policy_decision)
-            QMessageBox.warning(self, "Permissão negada", policy_decision.reason)
+            self.guarded_tools.record(request, policy_decision)
+            self.result.setPlainText(f"Permissão negada: {policy_decision.reason}")
             return
-        audit_logger.record(action_request, policy_decision)
+        self.guarded_tools.record(request, policy_decision)
         command = str(config["command"])
         args = config.get("args", [])
         env_vars = config.get("env_vars", [])
@@ -3078,7 +3101,7 @@ class MCPDialog(QDialog):
         if not self._server_is_approved(name, config):
             self._warn_configuration_changed()
             return
-        approval_token = approval_manager.approve_from_ui(action_request)
+        approval_token = self.guarded_tools.approve_from_ui(request)
         from .mcp_client import MCPClient, MCPServer
 
         server = MCPServer(
@@ -3102,8 +3125,8 @@ class MCPDialog(QDialog):
             )
         )
         self.worker = TaskThread(
-            lambda: ToolGuard(policy, approval_manager, audit_logger).execute(
-                action_request,
+            lambda: self.guarded_tools.execute(
+                request,
                 lambda **tool_arguments: MCPClient().call_tool(
                     server,
                     str(tool["name"]),

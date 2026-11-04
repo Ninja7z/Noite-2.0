@@ -153,6 +153,26 @@ def test_project_context_redacts_provider_secrets_and_bearer_tokens(tmp_path):
     assert context.count("[REDACTED]") >= 2
 
 
+def test_redacts_quoted_json_keys_and_multiline_yaml_secret_blocks():
+    json_text = '{\n  "api_key": "synthetic-json-api-key",\n  "public": "keep-this"\n}'
+    json_redacted = _redact_secret_values(json_text)
+    assert "synthetic-json-api-key" not in json_redacted
+    assert '"api_key": "[REDACTED]"' in json_redacted
+    assert "keep-this" in json_redacted
+
+    yaml_text = (
+        "service:\n"
+        "  private_key: |\n"
+        "    synthetic-yaml-private-line-one\n"
+        "    synthetic-yaml-private-line-two\n"
+        "  host: db.internal\n"
+    )
+    yaml_redacted = _redact_secret_values(yaml_text)
+    assert "synthetic-yaml-private-line-one" not in yaml_redacted
+    assert "synthetic-yaml-private-line-two" not in yaml_redacted
+    assert "host: db.internal" in yaml_redacted
+
+
 def test_redacts_secret_formats_from_review_and_preserves_public_values():
     secrets = [
         ("DB_PASSWORD=synthetic-db-password", "synthetic-db-password"),
@@ -400,6 +420,23 @@ def test_malformed_ipv6_url_still_redacts_userinfo(tmp_path):
     context = retrieve_workspace_context(tmp_path, "ipv6 url caminho")
     assert "synthetic-malformed-ipv6-password" not in context
     assert "https://[REDACTED]@[::1/caminho" in context
+
+
+def test_opened_workspace_file_handle_rejects_external_symlink_target(tmp_path):
+    from noite.workspace import _read_workspace_bytes
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("external-secret", encoding="utf-8")
+    link = workspace / "linked.txt"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("File symlinks unavailable")
+
+    with pytest.raises((OSError, ValueError)):
+        _read_workspace_bytes(link, workspace)
 
 
 def test_workspace_search_and_context_do_not_follow_external_directory_symlink(tmp_path):

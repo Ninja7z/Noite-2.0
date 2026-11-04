@@ -1,3 +1,11 @@
+## Snapshot atual — 2026-11-03
+
+O conteúdo abaixo é histórico (2026-11-01). Não reutilize hashes, branches,
+estado remoto, configurações ou contagens de testes sem nova verificação.
+Checkout verificado: worktree stabilize-core-lab-1d2bbe70186b491093ebdb2b7307e001,
+HEAD 76d7c91. Há alterações locais preexistentes em pyproject.toml e scripts
+temporários não rastreados; preserve-os. O estado remoto não foi verificado.
+
 # Inventário do projeto — 2026-11-01
 
 ## Checkout e Git

@@ -173,14 +173,14 @@ def test_mcp_server_requires_configured_environment_variable(tmp_path, monkeypat
         "invalid",
         sys.executable,
         cwd=str(tmp_path),
-        env_vars=("NOITE_TEST_MISSING_MCP_VAR",),
+        env_vars=("NOITE_MCP_TEST_MISSING_VAR",),
     )
 
     async def exercise():
         async with client._session(server):
             pass
 
-    monkeypatch.delenv("NOITE_TEST_MISSING_MCP_VAR", raising=False)
+    monkeypatch.delenv("NOITE_MCP_TEST_MISSING_VAR", raising=False)
     with pytest.raises(ValueError, match="não está definida"):
         asyncio.run(exercise())
 
@@ -188,15 +188,15 @@ def test_mcp_server_requires_configured_environment_variable(tmp_path, monkeypat
 def test_mcp_arguments_resolve_secret_references_without_persisting_values(monkeypatch):
     from noite.mcp_client import _resolve_server_args
 
-    monkeypatch.setenv("NOITE_TEST_MCP_TOKEN", "secret-value")
+    monkeypatch.setenv("NOITE_MCP_TEST_VALUE", "secret-value")
     server = MCPServer(
         "safe",
         sys.executable,
-        ("--api-key", "\u0024{NOITE_TEST_MCP_TOKEN}"),
-        env_vars=("NOITE_TEST_MCP_TOKEN",),
+        ("--api-key", "\u0024{NOITE_MCP_TEST_VALUE}"),
+        env_vars=("NOITE_MCP_TEST_VALUE",),
     )
 
-    assert _resolve_server_args(server, {"NOITE_TEST_MCP_TOKEN": "secret-value"}) == [
+    assert _resolve_server_args(server, {"NOITE_MCP_TEST_VALUE": "secret-value"}) == [
         "--api-key",
         "secret-value",
     ]
@@ -219,3 +219,58 @@ def test_mcp_arguments_reject_inline_or_unauthorized_secrets(args):
 
     with pytest.raises(ValueError):
         _resolve_server_args(server, {})
+
+
+def test_mcp_argument_validation_rejects_oversized_nested_and_non_json_values():
+    from noite.mcp_client import _validate_tool_arguments
+
+    with pytest.raises(ValueError, match="reservada"):
+        _validate_tool_arguments({"__proto__": "polluted"})
+    nested = "value"
+    for _ in range(10):
+        nested = {"child": nested}
+    with pytest.raises(ValueError, match="estrutura"):
+        _validate_tool_arguments({"nested": nested})
+    with pytest.raises(ValueError, match="caracteres"):
+        _validate_tool_arguments({"payload": "x" * 8_001})
+    with pytest.raises(ValueError, match="JSON válido"):
+        _validate_tool_arguments({"number": float("nan")})
+
+
+def test_mcp_argument_validation_rejects_untrusted_schema_features():
+    from noite.mcp_client import _validate_tool_schema
+
+    with pytest.raises(ValueError, match="referência interna ou externa"):
+        _validate_tool_schema({"type": "object", "$ref": "https://example.invalid/schema"})
+    with pytest.raises(ValueError, match="referência interna ou externa"):
+        _validate_tool_schema({"type": "object", "$ref": "#/$defs/node"})
+    with pytest.raises(ValueError, match="padrões"):
+        _validate_tool_schema({"type": "object", "properties": {"value": {"pattern": ".*"}}})
+
+
+def test_mcp_client_rejects_host_and_provider_secrets_in_server_environment(tmp_path, monkeypatch):
+    client = MCPClient()
+    monkeypatch.setenv("ZAI_API_KEY", "private-provider-key")
+    server = MCPServer(
+        "unsafe",
+        sys.executable,
+        cwd=str(tmp_path),
+        env_vars=("ZAI_API_KEY",),
+    )
+
+    async def exercise():
+        async with client._session(server):
+            pass
+
+    with pytest.raises(ValueError, match="bloqueada"):
+        asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["MCP_SERVER_SECRET", "NOITE_MCP_PRIVATE_KEY", "MCP_CUSTOM_API_KEY", "NOITE_MCP_SESSION_TOKEN"],
+)
+def test_mcp_environment_prefix_does_not_authorize_secret_variables(name):
+    from noite.mcp_client import _is_allowed_mcp_environment_variable
+
+    assert not _is_allowed_mcp_environment_variable(name)

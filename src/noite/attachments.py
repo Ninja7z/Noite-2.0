@@ -9,7 +9,9 @@ import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from xml.etree import ElementTree
+
+from defusedxml import ElementTree
+from defusedxml.common import DefusedXmlException
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_EXTRACTED_CHARS = 40_000
@@ -21,6 +23,18 @@ TEXT_SUFFIXES = {".txt", ".md", ".py", ".json", ".csv", ".xml", ".log", ".yaml",
 
 class AttachmentError(ValueError):
     pass
+
+
+def _parse_office_xml(data: bytes):
+    """Parse Office XML while rejecting DTDs and entity declarations safely."""
+    try:
+        return ElementTree.fromstring(
+            data, forbid_dtd=True, forbid_entities=True, forbid_external=True
+        )
+    except DefusedXmlException as exc:
+        raise AttachmentError(
+            "Documentos Office com DTD ou entidades XML não são aceitos."
+        ) from exc
 
 
 def _read_zip_member(archive: zipfile.ZipFile, name: str) -> bytes:
@@ -83,7 +97,7 @@ def select_relevant_text(text: str, query: str, *, max_chars: int) -> str:
 
 def _docx_text(data: bytes) -> str:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        xml = ElementTree.fromstring(_read_zip_member(archive, "word/document.xml"))
+        xml = _parse_office_xml(_read_zip_member(archive, "word/document.xml"))
     return "\n".join(
         "".join(node.text or "" for node in paragraph.iter() if node.tag.endswith("}t"))
         for paragraph in xml.iter()
@@ -95,7 +109,7 @@ def _xlsx_text(data: bytes) -> tuple[str, bool]:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         shared = []
         if "xl/sharedStrings.xml" in archive.namelist():
-            shared_xml = ElementTree.fromstring(
+            shared_xml = _parse_office_xml(
                 _read_zip_member(archive, "xl/sharedStrings.xml")
             )
             shared = ["".join(node.text or "" for node in item.iter() if node.tag.endswith("}t"))
@@ -106,7 +120,7 @@ def _xlsx_text(data: bytes) -> tuple[str, bool]:
         )
         rows = []
         for sheet in sheets[:20]:
-            root = ElementTree.fromstring(_read_zip_member(archive, sheet))
+            root = _parse_office_xml(_read_zip_member(archive, sheet))
             for row in root.iter():
                 if not row.tag.endswith("}row"):
                     continue
@@ -131,7 +145,7 @@ def _pptx_text(data: bytes) -> tuple[str, bool]:
         )
         extracted = []
         for slide in slides[:100]:
-            root = ElementTree.fromstring(_read_zip_member(archive, slide))
+            root = _parse_office_xml(_read_zip_member(archive, slide))
             extracted.append(" ".join(node.text or "" for node in root.iter()
                                       if node.tag.endswith("}t")))
         return "\n".join(extracted), len(slides) > 100

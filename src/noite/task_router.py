@@ -132,57 +132,102 @@ _HARDWARE_PROFILE = {
     "gpu": "gtx_1660s",
 }
 
+# VRAM estimada (GB) para os pesos Q4_K_M de cada faixa de parâmetros (em bilhões).
+_MODEL_SIZE_MAP = {
+    0.5: 0.3,
+    1.5: 1.2,
+    2.0: 1.8,
+    2.5: 2.0,
+    3.0: 2.3,
+    3.8: 2.6,
+    4.0: 2.8,
+    5.0: 3.5,
+    6.0: 4.0,
+    7.0: 4.7,  # 7B Q4_K_M ~4.7GB de pesos, mais preciso que a média.
+    8.0: 5.2,
+    9.0: 5.8,
+    10.0: 6.5,
+    13.0: 8.5,
+    14.0: 9.0,
+    20.0: 12.5,
+    30.0: 18.0,
+}
+# O sufixo "b" pertence ao número, então precisa ficar fora do lookahead negativo
+# final; assim "7b" casa e o "2.5" de "qwen2.5" continua ignorado.
+_PARAMETER_COUNT = re.compile(r"(?<![a-z0-9])(\d+(?:\.\d+)?)b(?![a-z0-9])")
+# Fallback para tags sem sufixo "b" (ex.: "mistral:7").
+_TAGGED_PARAMETER_COUNT = re.compile(r":(\d+(?:\.\d+)?)\b")
+
+# Overhead conservador: pesos + buffers, KV cache inicial e metadados.
+_VRAM_OVERHEAD_RATIO = 1.25
+_RAM_OVERHEAD_RATIO = 1.3
+_COMFORTABLE_FREE_VRAM_PERCENT = 20.0
+
+_RECOMMENDED_MODELS = (
+    (
+        "gemma:2b",
+        "2B Q4_K_M -- cabe nos 6GB de VRAM da GTX 1660S; rapido em CPU+GPU misturada.",
+    ),
+    (
+        "gemma:3b",
+        "3B Q4_K_M -- cabe nos 6GB de VRAM; use se precisar de mais capacidade.",
+    ),
+    (
+        "phi3:3.8b",
+        "3.8B Q4_K_M -- bom equilibrio velocidade/qualidade; cabe nos 6GB de VRAM.",
+    ),
+    (
+        "llama3.2:3b",
+        "3B Q4_K_M -- similar ao phi3; pode ser ligeiramente mais lento.",
+    ),
+    (
+        "mistral:7b",
+        "7B Q4_K_M -- cabe na RAM de 16GB; depende da divisao CPU/GPU. Use se necessario.",
+    ),
+)
+
 
 def suggest_models_for_hardware(settings) -> list[dict[str, str]]:
     """Retorna modelos recomendados para o hardware atual baseado em RAM/VRAM."""
-    recommendations = []
-    recommendations.append(
-        {
-            "model": "gemma:2b",
-            "provider": "ollama",
-            "reason": "2B Q4_K_M -- cabem nos 6GB VRAM da GTX 1660S; rpidos em CPU+GPU misturada.",
-        }
-    )
-    recommendations.append(
-        {
-            "model": "gemma:3b",
-            "provider": "ollama",
-            "reason": "3B Q4_K_M -- cabem nos 6GB VRAM, mas podem ser lentos em CPU sem AVX2",
-            "reason2": "; use se precisar de mais capacidade.",
-        }
-    )
-    recommendations.append(
-        {
-            "model": "phi3:3.8b",
-            "provider": "ollama",
-            "reason": "3.8B Q4_K_M -- bom equilbrio velocidade/qualidade; cabem nos 6GB VRAM.",
-        }
-    )
-    recommendations.append(
-        {
-            "model": "llama3.2:3b",
-            "provider": "ollama",
-            "reason": "3B Q4_K_M -- similar ao phi3; pode ser ligeiramente mais lento",
-        }
-    )
-    recommendations.append(
-        {
-            "model": "mistral:7b",
-            "provider": "ollama",
-            "reason": "7B Q4_K_M -- cabe na RAM de 16GB; desempenho depende da divisão CPU/GPU",
-            "reason2": ". Use apenas se necessário.",
-        }
-    )
-    user_model = settings.local_model.strip()
-    if user_model:
-        lowered = user_model.casefold()
-        for rec in recommendations:
-            if rec["model"].casefold().startswith(lowered):
-                recs = [r for r in recommendations if r["model"] != rec["model"]]
-                recs.insert(0, rec)
-                recommendations = recs
-                break
+    recommendations = [
+        {"model": model, "provider": "ollama", "reason": reason}
+        for model, reason in _RECOMMENDED_MODELS
+    ]
+    user_model = (settings.local_model or "").strip().casefold()
+    if not user_model:
+        return recommendations
+    for index, rec in enumerate(recommendations):
+        if rec["model"].casefold().startswith(user_model):
+            return [rec] + recommendations[:index] + recommendations[index + 1 :]
     return recommendations
+
+
+def _parameter_count_billions(model_id: str) -> float | None:
+    """Extrai a quantidade de parâmetros (bilhões) do nome ou da tag do modelo."""
+    model = model_id.casefold()
+    match = _PARAMETER_COUNT.search(model) or _TAGGED_PARAMETER_COUNT.search(model)
+    if match is None:
+        return None
+    return float(match.group(1))
+
+
+def _memory_fit(parameter_count: float, vram_gb: int, ram_gb: int) -> tuple[bool, str]:
+    """Estima se o modelo cabe em VRAM/RAM e qual a margem livre resultante."""
+    estimated_vram = _MODEL_SIZE_MAP.get(parameter_count, parameter_count * 0.65)
+    estimated_vram_real = estimated_vram * _VRAM_OVERHEAD_RATIO
+    estimated_ram = max(2.0, estimated_vram_real * _RAM_OVERHEAD_RATIO)
+    fits_vram = estimated_vram_real <= vram_gb
+    fits_ram = estimated_ram <= ram_gb
+    if fits_vram and fits_ram:
+        free_vram_pct = ((vram_gb - estimated_vram_real) / vram_gb) * 100 if vram_gb else 0.0
+        comfortable = free_vram_pct >= _COMFORTABLE_FREE_VRAM_PERCENT
+        category = "confortavel" if comfortable else "limitado"
+    elif fits_vram or fits_ram:
+        # Cabe em um dos recursos, mas nao nos dois com margem.
+        category = "limitado"
+    else:
+        category = "inviavel"
+    return fits_vram and fits_ram, category
 
 
 def is_model_compatible(model_id: str, vram_gb: int, ram_gb: int) -> bool | None:
@@ -196,145 +241,38 @@ def is_model_compatible(model_id: str, vram_gb: int, ram_gb: int) -> bool | None
         False se exceder a memória disponível (estimativa).
         None se não for possível determinar o tamanho do modelo.
 
-    Critical Notes (must-read):
-        1. "Caber na memória" NÃO equivale a desempenho suave.
-           - Peso dos parâmetros ≠ VRAM ocupada real (buffers, KV cache, overhead aumentam 15-30%)
-           - Ex: 7B Q4_K_M ~4.7GB de pesos, mas podem consumir 5.4-5.9GB VRAM real
-        2. Ausência de AVX2 (i7-3770) NÃO limita offload para GPU.
-           - llama.cpp pode descarregar camadas para GTX 1660 Super normalmente
-           - O gargalo é processamento CPU quando camadas não cabem na VRAM
-           - Transferências excessivas RAM↔VRAM degradam performance
-        3. Contexto maior aumenta uso de KV cache, pressionando VRAM além do esperado
-
-    Model Classification (for hardware planning):
-        - 🟢 Confortável: modelo com margem de memória >= 20% livre após carregado
-        - 🟡 Limitado: modelo que cabe, mas com margem < 20% ou requiere offload significativo
-        - 🔴 Inviável: modelo excede VRAM/RAM disponíveis ou performance impraticável
+    Notas:
+        1. "Caber na memória" NÃO equivale a desempenho suave: pesos, buffers,
+           KV cache e metadados podem aumentar o consumo em 15-30%.
+        2. Ausência de AVX2 limita o processamento na CPU, não o offload para a GPU;
+           transferências RAM<->VRAM é que degradam a performance.
+        3. Contexto maior aumenta o KV cache e pressiona a VRAM além do esperado.
     """
-    size_map = {
-        0.5: 0.3,
-        1.5: 1.2,
-        2.0: 1.8,
-        2.5: 2.0,
-        3.0: 2.3,
-        3.8: 2.6,
-        4.0: 2.8,
-        5.0: 3.5,
-        6.0: 4.0,
-        7.0: 4.7,  # Atualizado: 7B Q4_K_M ~4.7GB (mais preciso)
-        8.0: 5.2,
-        9.0: 5.8,
-        10.0: 6.5,
-        13.0: 8.5,
-        14.0: 9.0,
-        20.0: 12.5,
-        30.0: 18.0,
-    }
-    model = model_id.casefold()
-    # Tenta extrair tamanho de parâmetros do nome do modelo
-    # Padrão: busca "7b", "3.8b", "2.5b" etc, evitando pegar "2.5" de "qwen2.5"
-    match = re.search(r"(?<![a-z0-9])(\d+(?:\.\d+)?)(?=b)(?![a-z0-9])", model)
-    if match is None:
-        # Fallback: busca após dois pontos (ex: "mistral:7b")
-        match = re.search(r":(\d+(?:\.\d+)?)\b", model)
-    if match is None:
-        # Não conseguiu determinar tamanho - retorna None em vez de True
-        # para forçar avaliação explícita
+    parameter_count = _parameter_count_billions(model_id)
+    if parameter_count is None:
+        # Indeterminado: retorna None para forçar avaliação explícita do chamador.
         return None
-    parameter_count = float(match.group(1))
-    estimated_vram = size_map.get(parameter_count, parameter_count * 0.65)
-    # Ajuste realista: pesos + ~25% de overhead (buffers, KV cache inicial, metadados)
-    real_vram_ratio = 1.25  # Fator de overhead conservador
-    estimated_vram_real = estimated_vram * real_vram_ratio
-    estimated_ram = max(2.0, estimated_vram_real * 1.3)
-    fits_vram = estimated_vram_real <= vram_gb
-    fits_ram = estimated_ram <= ram_gb
-
-    # Classificação em categorias (confortável/limitado/inviável)
-    if fits_vram and fits_ram:
-        free_vram_pct = ((vram_gb - estimated_vram_real) / vram_gb) * 100
-        if free_vram_pct >= 20:
-            category = "confortavel"
-        else:
-            category = "limitado"
-    elif fits_vram or fits_ram:
-        # Cabe em um dos recursos, mas não nos dois com margem
-        category = "limitado"
-    else:
-        category = "inviavel"
-
-    # Retorna bool | None para compatibilidade verso abaixo
-    # O código antigo que faz `if is_model_compatible(...)` funciona corretamente
-    return fits_vram and fits_ram
+    fits, _ = _memory_fit(parameter_count, vram_gb, ram_gb)
+    return fits
 
 
-def get_model_category(model_id: str, vram_gb: int, ram_gb: int) -> tuple[bool, str]:
+def get_model_category(model_id: str, vram_gb: int, ram_gb: int) -> tuple[bool | None, str]:
     """Classifica o nível de compatibilidade em categorias detalhadas.
 
     Returns:
         Tuple de (bool_compatível, categoria_str):
         - bool: True se caber na VRAM e RAM (mesmo algoritmo de is_model_compatible)
-        - str: Categoria - "confortavel", "limitado" ou "inviavel"
+        - str: Categoria - "confortavel", "limitado", "inviavel" ou "indeterminado"
 
     Categories:
         - 🟢 Confortável: margem de memória >= 20% livre após carregado
-        - 🟡 Limitado: modelo que cabe, mas com margem < 20% ou offload significativo necessário
+        - 🟡 Limitado: modelo que cabe, mas com margem < 20% ou offload necessário
         - 🔴 Inviável: modelo excede VRAM/RAM disponíveis ou performance impraticável
     """
-    size_map = {
-        0.5: 0.3,
-        1.5: 1.2,
-        2.0: 1.8,
-        2.5: 2.0,
-        3.0: 2.3,
-        3.8: 2.6,
-        4.0: 2.8,
-        5.0: 3.5,
-        6.0: 4.0,
-        7.0: 4.7,  # Atualizado: 7B Q4_K_M ~4.7GB (mais preciso)
-        8.0: 5.2,
-        9.0: 5.8,
-        10.0: 6.5,
-        13.0: 8.5,
-        14.0: 9.0,
-        20.0: 12.5,
-        30.0: 18.0,
-    }
-    model = model_id.casefold()
-    # Tenta extrair tamanho de parâmetros do nome do modelo
-    # Padrão: busca "7b", "3.8b", "2.5b" etc, evitando pegar "2.5" de "qwen2.5"
-    match = re.search(r"(?<![a-z0-9])(\d+(?:\.\d+)?)(?=b)(?![a-z0-9])", model)
-    if match is None:
-        # Fallback: busca após dois pontos (ex: "mistral:7b")
-        match = re.search(r":(\d+(?:\.\d+)?)\b", model)
-    if match is None:
-        # Não conseguiu determinar tamanho - retorna (None, "indeterminado")
+    parameter_count = _parameter_count_billions(model_id)
+    if parameter_count is None:
         return (None, "indeterminado")
-    parameter_count = float(match.group(1))
-    estimated_vram = size_map.get(parameter_count, parameter_count * 0.65)
-    # Ajuste realista: pesos + ~25% de overhead (buffers, KV cache inicial, metadados)
-    real_vram_ratio = 1.25  # Fator de overhead conservador
-    estimated_vram_real = estimated_vram * real_vram_ratio
-    estimated_ram = max(2.0, estimated_vram_real * 1.3)
-    fits_vram = estimated_vram_real <= vram_gb
-    fits_ram = estimated_ram <= ram_gb
-
-    # Classificação em categorias (confortável/limitado/inviável)
-    if fits_vram and fits_ram:
-        free_vram_pct = ((vram_gb - estimated_vram_real) / vram_gb) * 100
-        if free_vram_pct >= 20:
-            category = "confortavel"
-        else:
-            category = "limitado"
-    elif fits_vram or fits_ram:
-        # Cabe em um dos recursos, mas não nos dois com margem
-        category = "limitado"
-    else:
-        category = "inviavel"
-
-    # Retorna tupla: (bool_compatível, categoria_str)
-    # O bool aqui é o mesmo que is_model_compatible retornaria
-    return (fits_vram and fits_ram, category)
+    return _memory_fit(parameter_count, vram_gb, ram_gb)
 
 
 def get_hardware_profile() -> dict:

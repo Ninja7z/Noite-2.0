@@ -67,3 +67,37 @@ def test_route_chat_and_preserve_original_text() -> None:
 def test_route_rejects_empty_text(text: str) -> None:
     with pytest.raises(ValueError, match="não pode estar vazio"):
         route(text)
+
+@pytest.mark.parametrize(
+    ("text", "kind"),
+    [
+        ("fechar mascote", IntentKind.HIDE_MASCOT),
+        ("feche a Noite", IntentKind.HIDE_MASCOT),
+        ("exit mascot", IntentKind.HIDE_MASCOT),
+        ("close the mascot", IntentKind.HIDE_MASCOT),
+        ("abir noite", IntentKind.SHOW_MASCOT),
+        ("abrir noite", IntentKind.SHOW_MASCOT),
+        ("fechar noite", IntentKind.HIDE_MASCOT),
+        ("fechar Noite 2.0", IntentKind.HIDE_MASCOT),
+        ("hide mascot", IntentKind.HIDE_MASCOT),
+    ],
+)
+def test_route_mascot_commands(text, kind):
+    assert route(text).kind == kind
+
+
+@pytest.mark.parametrize(
+    ("text", "action", "endpoint"),
+    [
+        ("fechar mascote", "close", "/v1/mascot/close"),
+        ("feche a Noite", "close", "/v1/mascot/close"),
+        ("close the mascot", "close", "/v1/mascot/close"),
+        ("esconder mascote", "hide", "/v1/mascot/hide"),
+        ("ocultar a Noite", "hide", "/v1/mascot/hide"),
+        ("hide mascot", "hide", "/v1/mascot/hide"),
+    ],
+)
+def test_route_separates_mascot_close_from_hide(text, action, endpoint):
+    intent = route(text)
+    assert intent.kind == IntentKind.HIDE_MASCOT
+    assert intent.parameters == {"action": action, "endpoint": endpoint}

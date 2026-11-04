@@ -304,11 +304,13 @@ def test_thinking_panel_shows_only_received_text_and_collapses_after_response(
 def test_reference_dashboard_and_composer_follow_empty_chat_layout(app, tmp_path, monkeypatch):
     from noite import ui
     from noite.config import Settings
+    from noite.ide import ProjectDock
     from ui.client import MockClient
 
     settings = Settings(_env_file=None, data_dir=tmp_path)
     monkeypatch.setattr(ui, "get_settings", lambda: settings)
     monkeypatch.setattr(NoiteWindow, "_check_status", lambda self: None)
+    monkeypatch.setattr(ProjectDock, "_restore_workspace", lambda self: None)
     window = NoiteWindow(client=MockClient())
     window.resize(1000, 700)
     window.show()
@@ -352,7 +354,12 @@ def test_moon_icon_is_multiresolution_and_loadable(app):
 def test_mcp_call_requires_explicit_approval(app, tmp_path, monkeypatch):
     from PySide6.QtWidgets import QMessageBox
 
+    from noite.security import Capability, PermissionProfile
+
     dialog = MCPDialog(tmp_path)
+    dialog.guarded_tools.permissions.save_from_user(
+        PermissionProfile.FULL, {Capability.MCP}
+    )
     dialog.servers = {"example": {"command": "configured-server", "args": []}}
     dialog._save_servers()
     dialog._approved["example"] = dialog._server_fingerprint(dialog.servers["example"])
@@ -376,6 +383,7 @@ def test_approved_mcp_call_runs_only_selected_tool(app, tmp_path, monkeypatch):
     from PySide6.QtWidgets import QMessageBox
 
     from noite import mcp_client
+    from noite.security import Capability, PermissionProfile
 
     captured = {}
     done = threading.Event()
@@ -391,6 +399,9 @@ def test_approved_mcp_call_runs_only_selected_tool(app, tmp_path, monkeypatch):
     monkeypatch.setattr(mcp_client.MCPClient, "call_tool", fake_call)
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
     dialog = MCPDialog(tmp_path)
+    dialog.guarded_tools.permissions.save_from_user(
+        PermissionProfile.FULL, {Capability.MCP}
+    )
     dialog.servers = {"example": {"command": "configured-server", "args": ["--stdio"]}}
     dialog._save_servers()
     dialog._approved["example"] = dialog._server_fingerprint(dialog.servers["example"])
@@ -410,7 +421,10 @@ def test_approved_mcp_call_runs_only_selected_tool(app, tmp_path, monkeypatch):
 
     dialog._call_selected()
     deadline = time.monotonic() + 5
-    while not done.is_set() and time.monotonic() < deadline:
+    while (
+        (not done.is_set() or "Executando" in dialog.result.toPlainText())
+        and time.monotonic() < deadline
+    ):
         app.processEvents()
         time.sleep(0.01)
     app.processEvents()
@@ -465,7 +479,12 @@ def test_mcp_configuration_change_after_discovery_requires_rediscovery(app, tmp_
 def test_mcp_configuration_change_while_confirmation_is_open_aborts_call(
     app, tmp_path, monkeypatch
 ):
+    from noite.security import Capability, PermissionProfile
+
     dialog = MCPDialog(tmp_path)
+    dialog.guarded_tools.permissions.save_from_user(
+        PermissionProfile.FULL, {Capability.MCP}
+    )
     config = {"command": "configured-server", "args": []}
     dialog.servers = {"example": config}
     dialog._save_servers()
@@ -821,6 +840,13 @@ def test_project_dock_opens_edits_and_saves_workspace_file(app, tmp_path, monkey
 
     from noite.ide import ProjectDock
 
+    reviewed_diffs = []
+
+    def approve_review(dialog):
+        reviewed_diffs.append(dialog.detailedText())
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, "exec", approve_review)
     QSettings("cristnzx", "Noite2").setValue("workspace/last_path", "")
     source = tmp_path / "hello.py"
     source.write_text("print('hello')\n", encoding="utf-8")
@@ -843,6 +869,8 @@ def test_project_dock_opens_edits_and_saves_workspace_file(app, tmp_path, monkey
     assert dock.save_button.isEnabled() is True
     dock.save_current()
 
+    assert len(reviewed_diffs) == 1
+    assert "+# saved" in reviewed_diffs[0]
     assert source.read_text(encoding="utf-8") == "print('hello')\n# saved\n"
     assert editor.document().isModified() is False
     from noite.workspace import SearchMatch
@@ -857,6 +885,44 @@ def test_project_dock_opens_edits_and_saves_workspace_file(app, tmp_path, monkey
     assert dock.find_status.text() == "Substituído"
     assert "# updated" in editor.toPlainText()
     assert source.read_text(encoding="utf-8") == "print('hello')\n# saved\n"
+    dock.close()
+    QSettings("cristnzx", "Noite2").setValue("workspace/last_path", "")
+
+
+def test_project_dock_can_undo_last_confirmed_write(app, tmp_path, monkeypatch):
+    from PySide6.QtCore import QSettings
+
+    from noite.ide import ProjectDock
+
+    QSettings("cristnzx", "Noite2").setValue("workspace/last_path", "")
+    source = tmp_path / "sample.py"
+    source.write_text("value = 1\\n", encoding="utf-8")
+    monkeypatch.setattr(
+        QMessageBox,
+        "exec",
+        lambda _dialog: QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+    dock = ProjectDock()
+    dock.set_workspace(tmp_path)
+    dock.open_index(dock._file_filter.mapFromSource(dock._model.index(str(source))))
+    editor = dock.tabs.currentWidget()
+    editor.setPlainText("value = 2\\n")
+
+    dock.save_current()
+
+    assert source.read_text(encoding="utf-8") == "value = 2\\n"
+    assert dock.undo_write_button.isEnabled()
+    dock.undo_last_write()
+
+    assert source.read_text(encoding="utf-8") == "value = 1\\n"
+    assert editor.toPlainText() == "value = 1\\n"
+    assert not editor.document().isModified()
+    assert not dock.undo_write_button.isEnabled()
     dock.close()
     QSettings("cristnzx", "Noite2").setValue("workspace/last_path", "")
 

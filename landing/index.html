@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="pt-BR" data-mode="landing" data-sidebar="auto" data-activity="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0b11">
+  <meta name="description" content="Noite: assistente local que faz tarefas no seu computador e confere o resultado.">
+  <title>Noite</title>
+  <script src="assets/boot.js"></script>
+  <link rel="stylesheet" href="assets/app.css">
+  <link rel="stylesheet" href="assets/landing.css">
+  <link rel="stylesheet" href="assets/interface.css">
+  <script src="assets/app.js" defer></script>
+  <script src="assets/interface.js" defer></script>
+  <script src="assets/landing.js" defer></script>
+  <script src="assets/voice.js" defer></script>
+  <script src="assets/dynamic.js" defer></script>
+</head>
+<body>
+
+<!-- Landing: primeira tela -->
+<div class="landing">
+  <header class="l-header">
+    <a class="brand" href="#" data-go="landing" aria-label="Noite, início">Noite</a>
+    <nav class="l-nav" aria-label="Principal">
+      <a href="#como">Como funciona</a>
+      <a href="#capacidades">Capacidades</a>
+      <button class="l-cta" type="button" data-go="app">Abrir a Noite</button>
+    </nav>
+  </header>
+
+  <main class="landing-main">
+    <section class="hero">
+      <div class="hero-copy">
+        <h1>Diga o que precisa. A Noite faz no seu computador e confere o resultado.</h1>
+        <p class="hero-lede">Assistente local para conversar, trabalhar com arquivos e código e operar aplicativos, sempre com a sua aprovação antes de ações sensíveis.</p>
+        <form class="hero-composer" id="hero-composer">
+          <input id="hero-input" type="text" maxlength="12000" autocomplete="off" placeholder="O que vamos fazer?" aria-label="Escreva o que a Noite deve fazer">
+          <button class="hero-send" type="submit" aria-label="Começar">↑</button>
+        </form>
+        <p class="hero-status" id="hero-status"><span class="status-dot"></span><span class="hero-status-text">Conectando</span></p>
+      </div>
+
+      <figure class="cycle-card" aria-labelledby="cycle-title">
+        <figcaption class="cycle-title" id="cycle-title">Como a Noite trabalha</figcaption>
+        <ol class="cycle" id="cycle">
+          <li class="is-current">Observar</li>
+          <li>Interpretar</li>
+          <li>Planejar</li>
+          <li>Executar</li>
+          <li>Verificar</li>
+        </ol>
+        <p class="cycle-trace" id="cycle-trace" aria-live="off">Janela ativa: Bloco de Notas, sem alterações pendentes.</p>
+        <p class="cycle-note">Exemplo ilustrativo. O estado real aparece na área de conversa.</p>
+      </figure>
+    </section>
+
+    <section class="l-section" id="como">
+      <h2>O modelo decide. O código executa. O resultado volta para conferência.</h2>
+      <p class="l-prose">Nenhuma tarefa é dada como concluída antes de a Noite verificar o efeito. Ações que podem apagar, sobrescrever ou sair do computador esperam a sua aprovação.</p>
+    </section>
+
+    <section class="l-section" id="capacidades">
+      <h2>O que já funciona e o que está a caminho.</h2>
+      <div class="caps">
+        <div class="cap"><b>Conversa</b><p>Chat com o modelo local pelo Ollama, com histórico salvo.</p><span class="live">Disponível</span></div>
+        <div class="cap"><b>Arquivos</b><p>Leitura e busca no workspace, limitadas à pasta escolhida.</p><span>Parcial</span></div>
+        <div class="cap"><b>Código</b><p>Exploração de repositórios, edição controlada e execução de testes.</p><span>Parcial</span></div>
+        <div class="cap"><b>Computador</b><p>Abrir aplicativos, digitar e conferir o resultado na tela, com aprovação.</p><span>Em testes</span></div>
+        <div class="cap"><b>Memória</b><p>Lembrar preferências e contexto entre sessões.</p><span>Em desenvolvimento</span></div>
+        <div class="cap"><b>Voz</b><p>Fala, interrupção e palavra de ativação, com processamento local.</p><span>Planejado</span></div>
+      </div>
+    </section>
+
+    <footer class="l-footer">
+      <span>Noite 2.0 · local-first · Windows</span>
+      <button class="l-link" type="button" data-go="app">Abrir a Noite</button>
+    </footer>
+  </main>
+</div>
+
+<!-- Área de trabalho: layout do Codex (faixa de ícones, barra lateral por projeto, painel acoplado) -->
+<div class="app-shell" id="workspace">
+  <nav class="rail" aria-label="Áreas">
+    <button class="rail-btn is-active workspace-link" data-view="chat" title="Conversas" aria-label="Conversas"><span>◌</span></button>
+    <button class="rail-btn workspace-link" data-view="activity" title="Atividades" aria-label="Atividades"><span>⌁</span></button>
+    <button class="rail-btn workspace-link" data-view="projects" title="Projetos" aria-label="Projetos"><span>▦</span></button>
+    <button class="rail-btn workspace-link" data-view="memory" title="Memória (em breve)" aria-label="Memória"><span>◈</span></button>
+    <button class="rail-btn workspace-link" data-view="tools" title="Ferramentas (em breve)" aria-label="Ferramentas"><span>⌘</span></button>
+    <button class="rail-btn workspace-link" data-view="settings" title="Configurações (em breve)" aria-label="Configurações"><span>⚙</span></button>
+  </nav>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="side-head">
+      <a class="brand" href="#" data-go="landing" aria-label="Voltar ao início">Noite</a>
+      <button class="icon-btn mobile-close" id="close-sidebar" aria-label="Fechar menu">×</button>
+    </div>
+
+    <button class="new-chat" id="new-chat"><span>+</span> <span id="new-chat-label">Novo chat</span> <kbd>Ctrl K</kbd></button>
+
+    <div class="side-scroll">
+      <div class="side-group">
+        <div class="side-label">Projetos</div>
+        <div class="project-row"><span class="project-icon">▢</span>Noite 2.0</div>
+        <div class="conversation-list" id="conversation-list" aria-label="Conversas"></div>
+      </div>
+    </div>
+
+    <div class="side-status">
+      <span class="presence-indicator" id="presence-indicator"></span>
+      <span id="side-status">Iniciando…</span>
+    </div>
+  </aside>
+
+  <main class="main-area">
+    <header class="topbar">
+      <div class="top-left">
+        <button class="icon-btn menu-open" id="open-sidebar" aria-label="Abrir menu">☰</button>
+        <button class="icon-btn sidebar-toggle" id="sidebar-toggle" type="button" aria-pressed="true" aria-label="Ocultar barra lateral automaticamente" title="Ocultar barra lateral automaticamente"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><line x1="9" y1="4" x2="9" y2="20"/></svg></button>
+        <h1 class="area-title" id="current-title">Novo chat</h1>
+      </div>
+      <div class="top-right">
+        <div class="provider-wrap">
+          <button class="provider-switch" id="provider-switch" type="button" aria-haspopup="dialog" aria-expanded="false">
+            <span class="provider-glyph">◒</span><span id="provider-label">Nightly</span><span class="provider-chevron">⌄</span>
+          </button>
+          <div class="provider-menu" id="provider-menu" role="dialog" aria-label="Ambiente de IA" hidden>
+            <span class="provider-menu-label">AMBIENTE DE IA</span>
+            <button type="button" class="provider-option active" data-provider="nightly"><span class="provider-option-icon">◒</span><span><b>Nightly</b><small>Modelos locais · Ollama</small></span><i>✓</i></button>
+            <button type="button" class="provider-option" data-provider="cloud"><span class="provider-option-icon">☁</span><span><b>Cloud</b><small>Google Gemini · API</small></span><i>✓</i></button>
+            <p class="provider-menu-note" id="provider-menu-note">Modelos locais via Ollama.</p>
+            <div class="provider-menu-divider"></div>
+            <section class="provider-settings" aria-labelledby="reasoning-heading">
+              <span class="provider-menu-label" id="reasoning-heading">RACIOCÍNIO</span>
+              <label class="setting-row" for="reasoning-toggle">
+                <span><b>Raciocínio estendido</b><small id="reasoning-note">Mais tempo para tarefas complexas, em modelos locais compatíveis.</small></span>
+                <input id="reasoning-toggle" type="checkbox">
+              </label>
+            </section>
+            <div class="provider-menu-divider"></div>
+            <section class="provider-settings" aria-labelledby="permissions-heading">
+              <span class="provider-menu-label" id="permissions-heading">PERMISSÕES</span>
+              <div class="permission-options" role="group" aria-label="Nível de acesso da Noite">
+                <button type="button" class="permission-option active" data-profile="none" aria-pressed="true">
+                  <span><b>Sem acesso</b><small>Nenhuma ferramenta autorizada</small></span><i>✓</i>
+                </button>
+                <button type="button" class="permission-option" data-profile="restricted" aria-pressed="false">
+                  <span><b>Acesso restrito</b><small>Leitura e escrita de arquivos</small></span><i>✓</i>
+                </button>
+                <button type="button" class="permission-option" data-profile="full" aria-pressed="false">
+                  <span><b>Acesso total</b><small>Todas as capacidades disponíveis</small></span><i>✓</i>
+                </button>
+              </div>
+              <p class="provider-menu-note" id="permission-note">Sem acesso. Nenhuma ferramenta pode ser executada.</p>
+            </section>
+          </div>
+        </div>
+        <div class="model-status" id="model-status"><span class="status-dot"></span><span>Conectando</span></div>
+        <button class="icon-btn" id="activity-toggle" aria-label="Mostrar atividade" title="Atividade">⌁</button>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <section class="chat-column">
+        <div class="messages" id="messages" aria-live="polite">
+          <div class="welcome" id="welcome">
+            <div class="welcome-mark" aria-hidden="true">◌</div>
+            <h2 class="welcome-title">O que vamos fazer?</h2>
+            <p class="welcome-sub">Estou pronta para trabalhar.</p>
+            <div class="suggestions">
+              <button class="suggestion" data-prompt="Vamos continuar o desenvolvimento do projeto Noite 2.0.">Continuar o projeto Noite 2.0</button>
+              <button class="suggestion" data-prompt="Me ajude a organizar uma tarefa no meu computador.">Organizar uma tarefa</button>
+              <button class="suggestion" data-prompt="Quais capacidades estão disponíveis agora?">Ver o que está disponível</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="composer-wrap">
+          <form class="composer" id="composer">
+            <textarea id="message-input" rows="1" maxlength="12000" placeholder="Peça qualquer coisa à Noite" aria-label="Sua mensagem"></textarea>
+            <div class="composer-bottom">
+              <div class="composer-actions">
+                <button class="icon-btn mic-btn is-soon" id="mic-btn" type="button" aria-label="Falar com a Noite (em breve)" title="Voz: em breve">🎤</button>
+                <button class="send-btn" id="send-btn" type="submit" aria-label="Enviar mensagem">↑</button>
+              </div>
+            </div>
+          </form>
+          <p class="composer-disclaimer">A Noite pode cometer erros. Revise informações importantes.</p>
+        </div>
+      </section>
+
+      <aside class="activity-panel" id="activity-panel" aria-label="Atividade">
+        <div class="panel-heading">
+          <h2>Atividade</h2>
+          <button class="icon-btn activity-pin" id="activity-pin" type="button" aria-pressed="true" aria-label="Ocultar painel de atividade automaticamente" title="Ocultar painel automaticamente"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><line x1="15" y1="4" x2="15" y2="20"/></svg></button>
+          <button class="icon-btn panel-close" id="activity-close" aria-label="Fechar atividade">×</button>
+        </div>
+        <div class="status-block">
+          <span class="status-tag" id="system-tag">Inicializando</span>
+          <h3 id="system-title">Preparando a Noite</h3>
+          <p id="system-description">Verificando o motor local.</p>
+        </div>
+        <div class="section-label">Passos</div>
+        <div class="activity-list" id="activity-list">
+          <div class="activity-empty">As atividades aparecem aqui durante a conversa.</div>
+        </div>
+      </aside>
+    </section>
+  </main>
+</div>
+
+<div class="activity-edge" id="activity-edge" aria-hidden="true"></div>
+<div class="mobile-scrim" id="mobile-scrim"></div>
+<div class="toast-region" id="toast-region" aria-live="polite"></div>
+</body>
+</html>

@@ -16,22 +16,104 @@ from pathlib import Path
 
 MAX_OUTPUT_BYTES = 200_000
 DEFAULT_TIMEOUT_SECONDS = 120
-_SAFE_COMMANDS = {
+
+# Strict allowlist of safe commands for non-advanced mode
+_SAFE_COMMANDS = frozenset({
     "dir",
     "get-childitem",
     "get-content",
     "get-location",
     "select-string",
-}
-_DESTRUCTIVE = re.compile(
-    r"(?i)(?:\bremove-item\b|\bdel(?:ete)?\b|\berase\b|\brmdir\b|\bformat\b|"
-    r"\bclear-content\b|\bset-content\b|\badd-content\b|\bnew-item\b|\bcopy-item\b|"
-    r"\bout-file\b|\bexport-\w+\b|\bmove-item\b|\brename-item\b|\bstart-process\b|"
-    r"\bstop-process\b|\binvoke-expression\b|\binvoke-command\b|"
-    r"\bgit\s+(?:reset|clean|checkout|restore|rebase|merge|push|pull)\b|--fix\b)"
-)
-_SHELL_OPERATORS = re.compile(r"[;&|<>`$(){}'\"\r\n]")
+})
+
+# Commands that are never allowed (even in advanced mode)
+_BLOCKED_COMMANDS = frozenset({
+    "powershell", "powershell.exe", "pwsh", "pwsh.exe",
+    "cmd", "cmd.exe", "wscript", "wscript.exe",
+    "cscript", "cscript.exe",
+    "invoke-expression", "iex",
+    "invoke-command", "icm",
+    "start-process", "start", "saps",
+    "remove-item", "ri", "rm", "del", "delete", "erase", "rmdir",
+    "kill", "stop-process",
+    "clear-content", "set-content", "add-content",
+    "new-item", "copy-item", "move-item", "rename-item",
+    "out-file", "export-*",
+    "format",
+})
+
+# Parameters that are never allowed
+_BLOCKED_PARAMETERS = frozenset({
+    "encodedcommand", "encodedarguments", "command", "file", "executionpolicy",
+})
+
+# Safe token pattern for arguments (alphanumeric, underscore, dot, hyphen, slash)
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.\\/-]{1,260}$")
+
+# PowerShell AST validator - uses stdin for source to avoid env var injection
+_POWERSHELL_AST_VALIDATOR = r'''
+$ErrorActionPreference = 'Stop'
+$source = [Console]::In.ReadToEnd()
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseInput(
+    $source,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -gt 0 -or $ast.EndBlock.Statements.Count -ne 1) { exit 2 }
+$statement = $ast.EndBlock.Statements[0]
+if ($statement -isnot [System.Management.Automation.Language.PipelineAst]) { exit 3 }
+if ($statement.PipelineElements.Count -lt 1) { exit 4 }
+$forbidden = $ast.Find({ param($node)
+    $node -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or
+    $node -is [System.Management.Automation.Language.SubExpressionAst] -or
+    $node -is [System.Management.Automation.Language.ExpandableStringExpressionAst] -or
+    $node -is [System.Management.Automation.Language.VariableExpressionAst] -or
+    $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -or
+    $node -is [System.Management.Automation.Language.ArrayExpressionAst] -or
+    $node -is [System.Management.Automation.Language.HashtableAst] -or
+    $node -is [System.Management.Automation.Language.BinaryExpressionAst] -or
+    $node -is [System.Management.Automation.Language.UnaryExpressionAst] -or
+    $node -is [System.Management.Automation.Language.TypeExpressionAst] -or
+    $node -is [System.Management.Automation.Language.IndexExpressionAst] -or
+    $node -is [System.Management.Automation.Language.MemberExpressionAst] -or
+    $node -is [System.Management.Automation.Language.ConvertExpressionAst] -or
+    $node -is [System.Management.Automation.Language.AttributeAst]
+}, $true)
+if ($forbidden) { exit 7 }
+$blockedCommands = @'
+^(?i)(powershell(?:\.exe)?|pwsh(?:\.exe)?|cmd(?:\.exe)?|wscript(?:\.exe)?|
+cscript(?:\.exe)?|invoke-expression|iex|invoke-command|icm|start-process|start|saps|ri|rm|kill)$
+'@ -replace '\s', ''
+$blockedParameters = '^(?i)(encodedcommand|encodedarguments|command|file|executionpolicy)$'
+$names = [System.Collections.Generic.List[string]]::new()
+foreach ($commandAst in $statement.PipelineElements) {
+    if ($commandAst -isnot [System.Management.Automation.Language.CommandAst]) { exit 5 }
+    if ($commandAst.Redirections.Count -gt 0) { exit 6 }
+    foreach ($element in $commandAst.CommandElements) {
+        $isLiteral = (
+            $element -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+            $element -is [System.Management.Automation.Language.ConstantExpressionAst] -or
+            $element -is [System.Management.Automation.Language.CommandParameterAst]
+        )
+        if (-not $isLiteral) { exit 8 }
+    }
+    $name = $commandAst.GetCommandName()
+    if ([string]::IsNullOrWhiteSpace($name)) { exit 9 }
+    if ($name -match $blockedCommands) { exit 10 }
+    $resolvedCommand = Get-Command -Name $name -ErrorAction SilentlyContinue
+    if (
+        $resolvedCommand -and $resolvedCommand.CommandType -eq 'Alias' -and $name -ne 'dir'
+    ) { exit 12 }
+    if ($commandAst.CommandElements | Where-Object {
+        $_ -is [System.Management.Automation.Language.CommandParameterAst] -and
+        $_.ParameterName -match $blockedParameters
+    }) { exit 11 }
+    $names.Add($name)
+}
+[Console]::Out.Write([string]::Join('|', $names))
+'''
 
 
 class TerminalCommandError(ValueError):
@@ -142,10 +224,6 @@ class _WindowsJob:
             self.handle = None
 
 
-def is_destructive_command(command: str) -> bool:
-    return bool(_DESTRUCTIVE.search(command))
-
-
 def _workspace_path(token: str, cwd: Path) -> Path:
     if not _SAFE_TOKEN.fullmatch(token) or token.startswith(("/", "\\", "-")):
         raise TerminalCommandError("Use um caminho relativo simples dentro do workspace.")
@@ -157,6 +235,42 @@ def _workspace_path(token: str, cwd: Path) -> Path:
     return candidate
 
 
+def _validate_powershell_ast(command: str) -> str:
+    executable = Path(os.environ.get("SystemRoot", r"C:\Windows")) / (
+        r"System32\WindowsPowerShell\v1.0\powershell.exe"
+    )
+    if not executable.is_file():
+        raise TerminalCommandError("Windows PowerShell não está disponível para validar o comando.")
+    environment = _safe_environment()
+    try:
+        parsed = subprocess.run(
+            [
+                str(executable),
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                _POWERSHELL_AST_VALIDATOR,
+            ],
+            input=command,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=environment,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        message = "Não foi possível analisar o comando PowerShell com segurança."
+        raise TerminalCommandError(message) from exc
+    if parsed.returncode != 0:
+        raise TerminalCommandError(
+            "O comando precisa conter uma única chamada PowerShell literal, sem encadeamento, "
+            "scripts, variáveis, subexpressões, pipelines, redirecionamentos ou shells aninhados."
+        )
+    return parsed.stdout.strip().casefold()
+
+
 def validate_terminal_command(
     command: str, *, advanced: bool = False, cwd: Path | None = None
 ) -> str:
@@ -165,15 +279,16 @@ def validate_terminal_command(
         raise TerminalCommandError("Digite um comando antes de executar.")
     if "\x00" in normalized:
         raise TerminalCommandError("O comando contém um caractere inválido.")
+    
+    # Validate via PowerShell AST parser (blocks subexpressions, variables, script blocks, etc.)
+    verb = _validate_powershell_ast(normalized)
+    
     if not advanced:
-        first = re.match(r"[A-Za-z][A-Za-z0-9_-]*", normalized)
-        if first is None or first.group(0).casefold() not in _SAFE_COMMANDS:
+        if verb not in _SAFE_COMMANDS:
             raise TerminalCommandError(
                 "Comando fora da lista segura. Habilite o modo avançado nas configurações "
                 "para executar um comando arbitrário com confirmação."
             )
-        if _SHELL_OPERATORS.search(normalized):
-            raise TerminalCommandError("O modo seguro não aceita encadeamento ou redirecionamento.")
         tokens = normalized.split()
         verb = tokens[0].casefold()
         arguments = tokens[1:]
@@ -201,6 +316,15 @@ def validate_terminal_command(
 def _safe_environment() -> dict[str, str]:
     permitted = {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "USERPROFILE"}
     return {key: value for key, value in os.environ.items() if key.upper() in permitted}
+
+
+def is_destructive_command(command: str) -> bool:
+    """Check if a command would be rejected in safe mode (requires advanced mode)."""
+    try:
+        validate_terminal_command(command, advanced=False, cwd=Path.cwd())
+        return False
+    except TerminalCommandError:
+        return True
 
 
 def run_terminal_command(

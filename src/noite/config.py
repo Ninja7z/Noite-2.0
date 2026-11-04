@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     off_grid: bool = True
     local_model: str = "qwen2.5:3b"
+    vision_model: str = "qwen2.5vl:3b"
     ollama_base_url: str = "http://127.0.0.1:11434"
     model_timeout_seconds: int = Field(default=180, ge=1, le=600)
     data_dir: Path = Field(default_factory=lambda: Path.home() / ".noite")
@@ -32,6 +33,14 @@ class Settings(BaseSettings):
     glm_timeout_seconds: int = Field(default=60, ge=1, le=600)
     glm_max_retries: int = Field(default=1, ge=0, le=2)
     glm_task_categories: str = ""
+    provider_mode: str = "nightly"
+    reasoning_enabled: bool = False
+    gemini_model: str = "gemini/gemini-3.8-flash"
+    gemini_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY", "gemini_api_key"),
+        repr=False,
+    )
 
     @field_validator("workspace_dir", mode="before")
     @classmethod

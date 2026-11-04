@@ -1,12 +1,13 @@
+import gc
 import os
 
+import pytest
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QKeyEvent, QMouseEvent
+from PySide6.QtGui import QKeyEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from noite.config import Settings
 from noite.mascot import (
-    AssistantService,
     AssistantWorker,
     DiagnosticsWorker,
     MascotFace,
@@ -16,6 +17,14 @@ from noite.mascot import (
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _APP = QApplication.instance() or QApplication([])
 _APP.setQuitOnLastWindowClosed(False)
+
+
+@pytest.fixture(autouse=True)
+def _drain_qt_events_and_collect_objects():
+    yield
+    _APP.processEvents()
+    gc.collect()
+    _APP.processEvents()
 
 
 def test_mascot_face_exposes_activity_states():
@@ -28,8 +37,10 @@ def test_mascot_face_exposes_activity_states():
     face.show()
     app.processEvents()
     assert face.size().width() == 132
+    assert face.timer.isActive()
     face.close()
     app.processEvents()
+    assert not face.timer.isActive()
 
 
 class _FakeService:
@@ -66,7 +77,7 @@ class _FakeService:
 
 def test_mascot_window_expand_collapse_toggle(tmp_path):
     app = _APP
-    service = AssistantService(Settings(_env_file=None, data_dir=tmp_path))
+    service = _FakeService()
     window = MascotWindow(service)
     try:
         window.show()
@@ -79,7 +90,7 @@ def test_mascot_window_expand_collapse_toggle(tmp_path):
         assert window._expanded is True
         assert window.panel.isVisible() is True
 
-        window.collapse()
+        QTest.keyClick(window, Qt.Key.Key_Escape)
         assert window._expanded is False
         assert window.panel.isVisible() is False
     finally:
@@ -90,20 +101,13 @@ def test_mascot_window_expand_collapse_toggle(tmp_path):
 
 def test_right_click_on_mascot_opens_conversation(tmp_path):
     app = _APP
-    service = AssistantService(Settings(_env_file=None, data_dir=tmp_path))
+    service = _FakeService()
     window = MascotWindow(service)
     try:
         window.show()
         app.processEvents()
         assert window._expanded is False
-        event = QMouseEvent(
-            QEvent.Type.MouseButtonPress,
-            window.face.rect().center(),
-            Qt.MouseButton.RightButton,
-            Qt.MouseButton.RightButton,
-            Qt.KeyboardModifier.NoModifier,
-        )
-        window._face_pressed(event)
+        QTest.mouseClick(window.face, Qt.MouseButton.RightButton)
         app.processEvents()
         assert window._expanded is True
         assert window.panel.isVisible()
@@ -115,7 +119,7 @@ def test_right_click_on_mascot_opens_conversation(tmp_path):
 
 def test_mascot_window_escape_closes_when_collapsed(tmp_path):
     app = _APP
-    service = AssistantService(Settings(_env_file=None, data_dir=tmp_path))
+    service = _FakeService()
     window = MascotWindow(service)
     try:
         window.show()
@@ -130,32 +134,13 @@ def test_mascot_window_escape_closes_when_collapsed(tmp_path):
         assert not window.isVisible()
     finally:
         window.diagnostics_timer.stop()
-
-
-def test_mascot_window_escape_collapses_when_expanded(tmp_path):
-    app = _APP
-    service = AssistantService(Settings(_env_file=None, data_dir=tmp_path))
-    window = MascotWindow(service)
-    try:
-        window.show()
-        app.processEvents()
-
-        window.expand()
-        assert window._expanded is True
-        event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
-        window.keyPressEvent(event)
-
-        assert window._expanded is False
-        assert window.panel.isVisible() is False
-    finally:
-        window.diagnostics_timer.stop()
         window.close()
         app.processEvents()
 
 
 def test_refresh_diagnostics_skipped_when_collapsed(tmp_path):
     app = _APP
-    service = AssistantService(Settings(_env_file=None, data_dir=tmp_path))
+    service = _FakeService()
     window = MascotWindow(service)
     try:
         assert window._expanded is False
@@ -183,6 +168,33 @@ def test_assistant_worker_emits_chunks_and_completed():
     assert result["answer"] == "resposta completa"
     worker.deleteLater()
     app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def test_assistant_worker_cancel_stops_active_coroutine():
+    import asyncio
+    import threading
+
+    started = threading.Event()
+    cancelled = threading.Event()
+
+    class SlowService(_FakeService):
+        async def respond(self, text, conversation_id=None, on_chunk=None, on_activity=None):
+            started.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+    worker = AssistantWorker(SlowService(), "conv-1", "long task")
+    completed = []
+    worker.completed.connect(completed.append)
+    worker.start()
+    assert started.wait(2)
+    worker.cancel()
+    assert worker.wait(3000)
+    assert cancelled.is_set()
+    assert completed == []
 
 
 def test_diagnostics_worker_emits_completed_and_failed():
@@ -219,7 +231,7 @@ def test_diagnostics_worker_emits_completed_and_failed():
 
 def test_diagnostics_ready_shows_model_detail(tmp_path):
     app = _APP
-    service = AssistantService(Settings(_env_file=None, data_dir=tmp_path))
+    service = _FakeService()
     window = MascotWindow(service)
     try:
         window._diagnostics_ready(

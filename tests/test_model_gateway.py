@@ -140,11 +140,15 @@ def test_native_ollama_thinking_stream_separates_thinking_from_answer(monkeypatc
     async def supports_thinking(_base_url, _model):
         return True
 
-    monkeypatch.setattr(model_gateway, "httpx", SimpleNamespace(
-        AsyncClient=FakeClient,
-        TimeoutException=Exception,
-        HTTPError=Exception,
-    ))
+    monkeypatch.setattr(
+        model_gateway,
+        "httpx",
+        SimpleNamespace(
+            AsyncClient=FakeClient,
+            TimeoutException=Exception,
+            HTTPError=Exception,
+        ),
+    )
     monkeypatch.setattr(model_gateway, "_model_supports_thinking", supports_thinking)
     monkeypatch.setattr(
         model_gateway,
@@ -174,6 +178,56 @@ def test_native_ollama_thinking_stream_separates_thinking_from_answer(monkeypatc
     assert thought_chunks == ["Vou verificar."]
 
 
+def test_qwen35_normal_chat_disables_thinking_channel(monkeypatch) -> None:
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": "Resposta visível."}}
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, *, json):
+            captured.update(url=url, payload=json)
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        model_gateway,
+        "httpx",
+        SimpleNamespace(
+            AsyncClient=FakeClient,
+            TimeoutException=Exception,
+            HTTPError=Exception,
+        ),
+    )
+    monkeypatch.setattr(
+        model_gateway,
+        "get_settings",
+        lambda: SimpleNamespace(
+            local_model="qwen3.5:4b",
+            ollama_base_url="http://127.0.0.1:11434",
+            model_timeout_seconds=30,
+        ),
+    )
+
+    answer = _run(model_gateway.ask_local_model("Pergunta"))
+
+    assert captured["url"].endswith("/api/chat")
+    assert captured["payload"]["think"] is False
+    assert answer == "Resposta visível."
+
+
 @pytest.mark.parametrize(
     ("values", "expected"),
     [([False], False), ([True, False], True), (["low", "high"], True), (None, False)],
@@ -199,10 +253,14 @@ def test_ollama_thinking_detection_uses_advertised_values(monkeypatch, values, e
         async def post(self, *_args, **_kwargs):
             return FakeResponse()
 
-    monkeypatch.setattr(model_gateway, "httpx", SimpleNamespace(
-        AsyncClient=FakeClient,
-        HTTPError=Exception,
-    ))
+    monkeypatch.setattr(
+        model_gateway,
+        "httpx",
+        SimpleNamespace(
+            AsyncClient=FakeClient,
+            HTTPError=Exception,
+        ),
+    )
 
     assert _run(model_gateway._model_supports_thinking("http://ollama", "model")) is expected
 
@@ -469,3 +527,239 @@ def test_glm_rejects_malformed_and_empty_responses(monkeypatch, response, error_
         _run(model_gateway.ask_glm_model("Resuma um texto público", category="summarization"))
 
     assert "prompt" not in str(error.value).casefold()
+
+
+def test_model_usage_log_never_serializes_response_headers(caplog):
+    secret = "synthetic-glm-auth-header-secret"
+    response = SimpleNamespace(
+        usage=None,
+        _hidden_params={"headers": {"Authorization": f"Bearer {secret}"}},
+    )
+
+    model_gateway._log_model_usage(
+        "trace-test", "zai", "glm-test", "summarization", 0.0, response, "provider_error"
+    )
+
+    assert secret not in caplog.text
+    assert "Authorization" not in caplog.text
+
+
+def test_local_model_forwards_openwebui_tools_and_returns_tool_calls(monkeypatch) -> None:
+    captured = {}
+    expected_calls = [
+        {
+            "id": "call_123",
+            "type": "function",
+            "function": {"name": "noite_status", "arguments": "{}"},
+        }
+    ]
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "function": {
+                                "name": "noite_status",
+                                "arguments": {},
+                            },
+                        }
+                    ],
+                }
+            }
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured["timeout"] = kwargs["timeout"]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, *, json):
+            captured.update(url=url, payload=json)
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        model_gateway,
+        "httpx",
+        SimpleNamespace(AsyncClient=FakeClient, TimeoutException=TimeoutError, HTTPError=Exception),
+    )
+    monkeypatch.setattr(
+        model_gateway,
+        "get_settings",
+        lambda: SimpleNamespace(
+            local_model="qwen2.5:3b",
+            ollama_base_url="http://127.0.0.1:11434",
+            model_timeout_seconds=45,
+        ),
+    )
+    tools = [{"type": "function", "function": {"name": "noite_status", "parameters": {}}}]
+    messages = [{"role": "user", "content": "Confira o status."}]
+
+    result = _run(
+        model_gateway.ask_local_model_with_tools(
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+        )
+    )
+
+    assert captured["url"] == "http://127.0.0.1:11434/api/chat"
+    assert captured["timeout"] == 45
+    assert captured["payload"]["model"] == "qwen2.5:3b"
+    assert captured["payload"]["messages"] == messages
+    assert captured["payload"]["tools"] == tools
+    assert result["role"] == "assistant"
+    assert result["tool_calls"] == expected_calls
+
+
+def test_local_model_gateway_reconstructs_openai_tool_round_trip(monkeypatch) -> None:
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"role": "assistant", "content": "Encontrei cinco arquivos."}}
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url, *, json):
+            captured.update(payload=json)
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        model_gateway,
+        "httpx",
+        SimpleNamespace(AsyncClient=FakeClient, TimeoutException=TimeoutError, HTTPError=Exception),
+    )
+    monkeypatch.setattr(
+        model_gateway,
+        "get_settings",
+        lambda: SimpleNamespace(
+            local_model="qwen2.5:3b",
+            ollama_base_url="http://127.0.0.1:11434",
+            model_timeout_seconds=45,
+        ),
+    )
+    messages = [
+        {"role": "user", "content": "Pesquise arquivos."},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_search",
+                    "type": "function",
+                    "function": {
+                        "name": "noite_search_workspace",
+                        "arguments": '{"query": "relatorio", "limit": 5}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_search",
+            "name": "noite_search_workspace",
+            "content": "relatorio.txt",
+        },
+        {"role": "user", "content": "Resuma o retorno."},
+    ]
+
+    result = _run(
+        model_gateway.ask_local_model_with_tools(
+            messages=messages,
+            tools=[],
+            tool_choice="auto",
+        )
+    )
+
+    native_messages = captured["payload"]["messages"]
+    assert native_messages[1]["tool_calls"][0]["function"]["arguments"] == {
+        "query": "relatorio",
+        "limit": 5,
+    }
+    assert native_messages[2]["role"] == "tool"
+    assert native_messages[2]["tool_name"] == "noite_search_workspace"
+    assert native_messages[2]["content"] == "relatorio.txt"
+    assert result["content"] == "Encontrei cinco arquivos."
+
+
+def test_local_vision_model_uses_installed_qwen_vl(monkeypatch) -> None:
+    captured = {}
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured["timeout"] = kwargs["timeout"]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url):
+            captured["tags_url"] = url
+            return FakeResponse({"models": [{"name": "qwen2.5vl:3b"}]})
+
+        async def post(self, url, *, json):
+            captured.update(chat_url=url, payload=json)
+            return FakeResponse({"message": {"role": "assistant", "content": "Uma imagem."}})
+
+    monkeypatch.setattr(
+        model_gateway,
+        "httpx",
+        SimpleNamespace(
+            AsyncClient=FakeClient,
+            TimeoutException=TimeoutError,
+            HTTPError=Exception,
+        ),
+    )
+    monkeypatch.setattr(
+        model_gateway,
+        "get_settings",
+        lambda: SimpleNamespace(
+            local_model="qwen2.5:3b",
+            ollama_base_url="http://127.0.0.1:11434",
+            model_timeout_seconds=60,
+        ),
+    )
+    messages = [{"role": "user", "content": "Descreva a imagem.", "images": ["aGVsbG8="]}]
+
+    result = _run(model_gateway.ask_local_vision_model(messages=messages))
+
+    assert result == "Uma imagem."
+    assert captured["tags_url"] == "http://127.0.0.1:11434/api/tags"
+    assert captured["chat_url"] == "http://127.0.0.1:11434/api/chat"
+    assert captured["payload"]["model"] == "qwen2.5vl:3b"
+    assert captured["payload"]["messages"] == messages

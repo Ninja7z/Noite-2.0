@@ -173,7 +173,8 @@ def test_chat_uses_mocked_local_model_and_history(tmp_path, monkeypatch) -> None
     assert asyncio.run(assistant.respond("explique gravidade")) == "resposta simulada"
     assert captured["messages"][0]["role"] == "system"
     assert captured["messages"][-1] == {"role": "user", "content": "explique gravidade"}
-    assert captured["model"] == settings.local_model
+    assert captured["model"] is None
+    assert "automaticamente" in captured["messages"][0]["content"]
 
 
 def test_history_credentials_are_redacted_at_model_boundary_but_preserved_in_sqlite(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -15,6 +16,112 @@ _SECRET_ARGUMENT = re.compile(
     r"xox[baprs]-[A-Za-z0-9-]{12,}|AKIA[A-Z0-9]{16}|-----BEGIN [^-]*PRIVATE KEY-----)"
 )
 _SECRET_FLAGS = {"--token", "--api-key", "--password", "--secret", "--access-token"}
+_ALLOWED_ENV_PREFIXES = ("MCP_", "NOITE_MCP_")
+_BLOCKED_ENV_NAMES = {
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "SYSTEMROOT",
+    "WINDIR",
+    "ZAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "GITHUB_TOKEN",
+    "NOITE_MCP_AUTH_TOKEN",
+}
+_SENSITIVE_ENV_NAME = re.compile(
+    r"(?i)(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|CREDENTIAL|PRIVATE|ACCESS[_-]?KEY)"
+)
+
+
+def _is_allowed_mcp_environment_variable(name: str) -> bool:
+    normalized = name.upper()
+    return (
+        normalized not in _BLOCKED_ENV_NAMES
+        and normalized.startswith(_ALLOWED_ENV_PREFIXES)
+        and not _SENSITIVE_ENV_NAME.search(normalized)
+    )
+
+
+def _validate_tool_arguments(arguments: dict[str, Any]) -> None:
+    if not isinstance(arguments, dict):
+        raise ValueError("Os argumentos MCP precisam ser um objeto JSON.")
+    nodes = 0
+
+    def visit(value: Any, depth: int) -> None:
+        nonlocal nodes
+        nodes += 1
+        if nodes > 512 or depth > 8:
+            raise ValueError("Os argumentos MCP excedem os limites de estrutura.")
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if not isinstance(key, str) or len(key) > 128:
+                    raise ValueError("A chave de um argumento MCP é inválida ou muito longa.")
+                if key.casefold() in {"__proto__", "prototype", "constructor"}:
+                    raise ValueError("Os argumentos MCP contêm uma chave reservada.")
+                visit(child, depth + 1)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child, depth + 1)
+        elif isinstance(value, str):
+            if len(value) > 8_000:
+                raise ValueError("Um argumento MCP excede 8.000 caracteres.")
+        elif value is None or type(value) in {bool, int, float}:
+            return
+        else:
+            raise ValueError("Os argumentos MCP precisam conter somente valores JSON.")
+
+    visit(arguments, 0)
+    try:
+        serialized = json.dumps(
+            arguments,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Os argumentos MCP não formam JSON válido.") from exc
+    if len(serialized) > 16_000:
+        raise ValueError("Os argumentos MCP excedem 16.000 caracteres.")
+
+
+def _validate_tool_schema(schema: dict[str, Any]) -> None:
+    if not isinstance(schema, dict):
+        raise ValueError("O esquema da ferramenta MCP precisa ser um objeto JSON.")
+    nodes = 0
+    blocked_keywords = {"pattern", "patternProperties"}
+    reference_keywords = {"$ref", "$dynamicRef", "$recursiveRef"}
+
+    def visit(value: Any, depth: int) -> None:
+        nonlocal nodes
+        nodes += 1
+        if nodes > 1_024 or depth > 12:
+            raise ValueError("O esquema MCP excede os limites de estrutura.")
+        if isinstance(value, dict):
+            if blocked_keywords.intersection(value):
+                raise ValueError("O esquema MCP contém referências ou padrões não confiáveis.")
+            for keyword in reference_keywords:
+                if value.get(keyword) is not None:
+                    raise ValueError(
+                        "O esquema MCP contém uma referência interna ou externa não confiável."
+                    )
+            for child in value.values():
+                visit(child, depth + 1)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child, depth + 1)
+
+    visit(schema, 0)
+    try:
+        serialized = json.dumps(schema, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("O esquema MCP não forma JSON válido.") from exc
+    if len(serialized) > 32_000:
+        raise ValueError("O esquema MCP excede 32.000 caracteres.")
 
 
 def _resolve_server_args(server: MCPServer, environment: dict[str, str]) -> list[str]:
@@ -23,7 +130,7 @@ def _resolve_server_args(server: MCPServer, environment: dict[str, str]) -> list
         reference = _ENV_REFERENCE.fullmatch(argument)
         if reference:
             variable = reference.group(1)
-            if variable not in environment:
+            if variable not in environment or not _is_allowed_mcp_environment_variable(variable):
                 raise ValueError(
                     f"O argumento MCP referencia uma variável não autorizada: {variable}."
                 )
@@ -47,7 +154,7 @@ def _resolve_server_args(server: MCPServer, environment: dict[str, str]) -> list
                     "Valores de opções secretas MCP devem usar uma referência de ambiente."
                 )
             variable = reference.group(1)
-            if variable not in environment:
+            if variable not in environment or not _is_allowed_mcp_environment_variable(variable):
                 raise ValueError(
                     f"O argumento MCP referencia uma variável não autorizada: {variable}."
                 )
@@ -97,6 +204,8 @@ class MCPClient:
             raise ValueError("O diretório de trabalho MCP precisa ser uma pasta existente.")
         if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) for name in server.env_vars):
             raise ValueError("Variáveis de ambiente MCP devem ser informadas somente pelo nome.")
+        if any(not _is_allowed_mcp_environment_variable(name) for name in server.env_vars):
+            raise ValueError("A configuração MCP contém uma variável de ambiente bloqueada.")
         missing = [name for name in server.env_vars if name not in os.environ]
         if missing:
             raise ValueError("Uma variável de ambiente MCP configurada não está definida.")
@@ -141,6 +250,9 @@ class MCPClient:
     ) -> list[str]:
         if name not in server.allowed_tools:
             raise PermissionError(f"A ferramenta MCP '{name}' não está autorizada.")
+        _validate_tool_arguments(arguments)
+        if input_schema is not None:
+            _validate_tool_schema(input_schema)
         try:
             from jsonschema import validate
         except ImportError as exc:
@@ -156,6 +268,7 @@ class MCPClient:
                 )
                 if tool is None:
                     raise LookupError(f"A ferramenta MCP '{name}' não foi encontrada.")
+                _validate_tool_schema(tool.inputSchema)
                 validate(instance=arguments, schema=tool.inputSchema)
             async with asyncio.timeout(self.call_timeout or server.call_timeout):
                 result = await session.call_tool(name, arguments)

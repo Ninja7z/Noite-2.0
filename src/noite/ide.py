@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import difflib
 import re
 import threading
 from pathlib import Path
@@ -340,6 +341,7 @@ class ProjectDock(QDockWidget):
         self.setObjectName("projectDock")
         self.workspace: Path | None = None
         self._documents: dict[str, tuple[CodeEditor, str, str, bool]] = {}
+        self._last_write_undo: tuple[str, str, str, str, bool] | None = None
         self._model = QFileSystemModel(self)
         self._model.setFilter(QDir.AllDirs | QDir.Files | QDir.NoDotAndDotDot)
         self._file_filter = ProjectFileFilter(self)
@@ -365,6 +367,12 @@ class ProjectDock(QDockWidget):
         self.save_button = QPushButton("Salvar")
         self.save_button.setEnabled(False)
         self.save_button.clicked.connect(self.save_current)
+        self.undo_write_button = QPushButton("Desfazer gravação")
+        self.undo_write_button.setEnabled(False)
+        self.undo_write_button.setToolTip(
+            "Reverter a última gravação feita pelo editor, se o arquivo não mudou desde então"
+        )
+        self.undo_write_button.clicked.connect(self.undo_last_write)
         self.syntax_button = QPushButton("Sintaxe")
         self.syntax_button.setToolTip(
             "Verificar sintaxe Python no buffer aberto; não executa o arquivo"
@@ -376,6 +384,7 @@ class ProjectDock(QDockWidget):
         toolbar.addWidget(self.find_file_button)
         toolbar.addWidget(self.search_button)
         toolbar.addWidget(self.save_button)
+        toolbar.addWidget(self.undo_write_button)
         toolbar.addWidget(self.syntax_button)
         layout.addWidget(toolbar)
         self.find_bar = QWidget()
@@ -491,6 +500,8 @@ class ProjectDock(QDockWidget):
         if not root.is_dir():
             raise ValueError("O projeto precisa ser uma pasta.")
         self.workspace = root
+        self._last_write_undo = None
+        self.undo_write_button.setEnabled(False)
         self._model.setRootPath(str(root))
         self.tree.setRootIndex(self._file_filter.mapFromSource(self._model.index(str(root))))
         self.workspace_label.setText(str(root))
@@ -774,6 +785,38 @@ class ProjectDock(QDockWidget):
             return
         path, editor, digest, line_ending, has_bom = current
         try:
+            original = read_workspace_text(self.workspace, Path(path))
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Não foi possível revisar", str(exc))
+            return
+        proposed = editor.toPlainText()
+        if proposed == original.text:
+            editor.document().setModified(False)
+            self._refresh_title(path)
+            return
+        diff = "".join(
+            difflib.unified_diff(
+                original.text.splitlines(keepends=True),
+                proposed.splitlines(keepends=True),
+                fromfile=f"atual/{Path(path).name}",
+                tofile=f"proposta/{Path(path).name}",
+            )
+        )
+        review = QMessageBox(self)
+        review.setIcon(QMessageBox.Icon.Question)
+        review.setWindowTitle("Revisar alterações")
+        review.setText(
+            f"Aplicar as alterações em {Path(path).name}?\n"
+            "Confira o diff antes de confirmar."
+        )
+        review.setDetailedText(
+            diff[:25_000] + ("\n… diff truncado para exibição." if len(diff) > 25_000 else "")
+        )
+        review.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        review.setDefaultButton(QMessageBox.StandardButton.No)
+        if review.exec() != QMessageBox.StandardButton.Yes:
+            return
+        try:
             new_digest = save_workspace_text(
                 self.workspace,
                 Path(path),
@@ -786,7 +829,68 @@ class ProjectDock(QDockWidget):
             QMessageBox.warning(self, "Não foi possível salvar", str(exc))
             return
         self._documents[path] = (editor, new_digest, line_ending, has_bom)
+        self._last_write_undo = (
+            path,
+            original.text,
+            new_digest,
+            original.line_ending,
+            original.has_utf8_bom,
+        )
+        self.undo_write_button.setEnabled(True)
         editor.document().setModified(False)
+        self._refresh_title(path)
+
+    def undo_last_write(self) -> None:
+        undo = self._last_write_undo
+        if undo is None or self.workspace is None:
+            return
+        path, prior_text, expected_digest, line_ending, has_bom = undo
+        document = self._documents.get(path)
+        if document is None:
+            QMessageBox.information(
+                self, "Desfazer indisponível", "Reabra o arquivo para reverter a última gravação."
+            )
+            return
+        editor = document[0]
+        if editor.document().isModified():
+            QMessageBox.warning(
+                self,
+                "Buffer com alterações",
+                "Salve ou descarte as alterações atuais antes de desfazer a gravação anterior.",
+            )
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Confirmar reversão",
+                f"Restaurar a versão anterior de {Path(path).name}?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            != QMessageBox.Yes
+        ):
+            return
+        try:
+            restored_digest = save_workspace_text(
+                self.workspace,
+                Path(path),
+                prior_text,
+                expected_digest,
+                line_ending=line_ending,
+                has_utf8_bom=has_bom,
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                "Não foi possível desfazer",
+                f"O arquivo pode ter sido alterado desde a gravação. {exc}",
+            )
+            return
+        editor.setPlainText(prior_text)
+        editor.document().setModified(False)
+        self._documents[path] = (editor, restored_digest, line_ending, has_bom)
+        self._last_write_undo = None
+        self.undo_write_button.setEnabled(False)
         self._refresh_title(path)
 
     def close_tab(self, index: int) -> None:

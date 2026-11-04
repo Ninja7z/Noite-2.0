@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from noite.store import (
     add_message,
     create_conversation,
@@ -9,6 +11,7 @@ from noite.store import (
     open_database,
     recent_messages,
     rename_conversation,
+    search_messages,
     set_active_conversation_id,
 )
 
@@ -125,6 +128,28 @@ def test_database_uses_wal_and_busy_timeout(tmp_path):
     assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
     connection.close()
+
+
+def test_fts_search_treats_operators_as_literal_terms_and_bounds_input(tmp_path):
+    with open_database(tmp_path / "noite.sqlite3") as connection:
+        add_message(connection, "user", "literal OR NEAR NOT operator terms")
+        assert search_messages(connection, "OR") == ["literal OR NEAR NOT operator terms"]
+        assert search_messages(connection, "NEAR") == ["literal OR NEAR NOT operator terms"]
+        for invalid_limit in (0, -1, 101, True):
+            with pytest.raises(ValueError, match="entre 1 e 100"):
+                search_messages(connection, "literal", limit=invalid_limit)
+        try:
+            search_messages(connection, "x" * 513)
+        except ValueError as error:
+            assert "512" in str(error)
+        else:
+            raise AssertionError("oversized FTS query was accepted")
+        try:
+            search_messages(connection, " ".join(["term"] * 21))
+        except ValueError as error:
+            assert "20" in str(error)
+        else:
+            raise AssertionError("too many FTS terms were accepted")
 
 
 def test_open_database_rebuilds_fts_for_legacy_rows(tmp_path) -> None:

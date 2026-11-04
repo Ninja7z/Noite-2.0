@@ -7,7 +7,6 @@ import pytest
 from noite.terminal import (
     TerminalCommandError,
     _safe_environment,
-    is_destructive_command,
     run_terminal_command,
     validate_terminal_command,
 )
@@ -21,7 +20,6 @@ def test_safe_terminal_rejects_shell_chaining_and_unknown_commands():
         validate_terminal_command("Remove-Item file.txt")
     with pytest.raises(TerminalCommandError, match="lista segura"):
         validate_terminal_command("python -c 'print(1)'")
-    assert is_destructive_command("ruff check --fix src")
 
 
 def test_safe_terminal_rejects_powershell_subexpressions_and_escape_paths(tmp_path):
@@ -33,15 +31,45 @@ def test_safe_terminal_rejects_powershell_subexpressions_and_escape_paths(tmp_pa
         validate_terminal_command(f"Get-Content ..\\{outside.name}", cwd=tmp_path)
 
 
-@pytest.mark.parametrize("command", ["Remove-Item file.txt", "git reset --hard", "format D:"])
-def test_terminal_identifies_destructive_commands(command):
-    assert is_destructive_command(command)
+@pytest.mark.parametrize(
+    "command",
+    [
+        "Get-Content $(Get-Location)",
+        "Get-Content ${env:PATH}",
+        "Get-Content file.txt; Remove-Item file.txt",
+        "{ Remove-Item file.txt }",
+        "powershell.exe -EncodedCommand SQBFAFgA",
+        "iex 'Remove-Item file.txt'",
+        "Invoke-Expression 'Remove-Item file.txt'",
+        "Start-Process powershell -ArgumentList '-EncodedCommand SQBFAFgA'",
+        "ri file.txt",
+        "Get-Content file.txt > output.txt",
+        "Get-Content \"$(Get-Location)\"",
+    ],
+)
+def test_powershell_ast_rejects_compound_and_obfuscated_commands(command):
+    with pytest.raises(TerminalCommandError):
+        validate_terminal_command(command, advanced=True)
+
+
+def test_safe_terminal_allowlist_rejects_destructive_aliases():
+    for command in ("ri file.txt", "del file.txt", "erase file.txt"):
+        with pytest.raises(TerminalCommandError):
+            validate_terminal_command(command)
 
 
 def test_advanced_terminal_requires_explicit_mode():
     with pytest.raises(TerminalCommandError):
         validate_terminal_command("Write-Output ready")
     assert validate_terminal_command("Write-Output ready", advanced=True)
+
+
+def test_advanced_terminal_allows_literal_pipelines_but_not_script_blocks():
+    assert validate_terminal_command(
+        "Get-ChildItem | Select-Object Name", advanced=True
+    ) == "Get-ChildItem | Select-Object Name"
+    with pytest.raises(TerminalCommandError):
+        validate_terminal_command("Get-ChildItem | ForEach-Object { $_.Name }", advanced=True)
 
 
 def test_terminal_environment_omits_api_and_database_secrets(monkeypatch):
@@ -82,13 +110,15 @@ def test_terminal_timeout_kills_job_tree(tmp_path):
 
 
 def test_terminal_output_is_capped_and_nonzero_exit_is_returned(tmp_path):
+    large_file = tmp_path / "large.txt"
+    large_file.write_text("x" * 205_000, encoding="utf-8")
     result = run_terminal_command(
-        "1..5000 | ForEach-Object { 'x' * 1000 }",
-        tmp_path,
-        advanced=True,
+        "Get-Content large.txt | Out-String", tmp_path, advanced=True
     )
     assert result.truncated
     assert len(result.output.encode("utf-8")) <= 205_000
 
-    nonzero = run_terminal_command("exit 7", tmp_path, advanced=True)
-    assert nonzero.exit_code == 7
+    nonzero = run_terminal_command(
+        "Get-Content missing.txt -ErrorAction Stop", tmp_path, advanced=True
+    )
+    assert nonzero.exit_code != 0

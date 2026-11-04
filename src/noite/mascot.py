@@ -8,7 +8,7 @@ import logging
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRect, QSettings, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (
     QCloseEvent,
     QColor,
@@ -53,15 +53,24 @@ class AssistantWorker(QThread):
         self.service = service
         self.conversation_id = conversation_id
         self.prompt = prompt
-        self._cancelled = False
+        self._cancelled = threading.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._task: asyncio.Task | None = None
 
     def cancel(self) -> None:
-        """Sinaliza cancelamento; emissões subsequentes são ignoradas."""
-        self._cancelled = True
+        """Cancela a tarefa ativa no loop dela, sem bloquear a interface."""
+        self._cancelled.set()
+        loop = self._loop
+        task = self._task
+        if loop is not None and task is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(task.cancel)
 
     def run(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._loop = loop
         try:
-            answer = asyncio.run(
+            self._task = loop.create_task(
                 self.service.respond(
                     self.prompt,
                     conversation_id=self.conversation_id,
@@ -69,20 +78,35 @@ class AssistantWorker(QThread):
                     on_activity=self._emit_activity,
                 )
             )
-            if not self._cancelled:
+            if self._cancelled.is_set():
+                self._task.cancel()
+            answer = loop.run_until_complete(self._task)
+            if not self._cancelled.is_set():
                 self.completed.emit(answer)
+        except asyncio.CancelledError:
+            logger.info("Mascot request cancelled by user")
         except Exception as exc:
-            if not self._cancelled:
+            if not self._cancelled.is_set():
                 logger.error("Mascot request failed (%s)", type(exc).__name__)
                 self.failed.emit(f"Não consegui concluir. Falha: {type(exc).__name__}.")
+        finally:
+            self._task = None
+            self._loop = None
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.close()
+            asyncio.set_event_loop(None)
 
     def _emit_chunk(self, text: str) -> None:
-        if self._cancelled:
+        if self._cancelled.is_set():
             return
         self.chunk.emit(text)
 
     def _emit_activity(self, event: ActivityEvent) -> None:
-        if self._cancelled:
+        if self._cancelled.is_set():
             return
         self.activity.emit(event)
 
@@ -191,6 +215,10 @@ class MascotFace(QWidget):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._animate)
         self.timer.start(900)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self.timer.stop()
+        super().closeEvent(event)
 
     def set_state(self, state: str) -> None:
         self.state = state
@@ -361,9 +389,7 @@ class MascotWindow(QWidget):
         self.layout.addWidget(self.panel)
         self.panel.hide()
         self._expanded = False
-        self.face.mousePressEvent = self._face_pressed
-        self.face.mouseMoveEvent = self._face_move
-        self.face.mouseReleaseEvent = self._face_release
+        self.face.installEventFilter(self)
 
     def _restore_position(self) -> None:
         settings = QSettings(SETTINGS_ORGANIZATION, SETTINGS_APPLICATION)
@@ -381,6 +407,22 @@ class MascotWindow(QWidget):
         settings.setValue("x", self.x())
         settings.setValue("y", self.y())
         settings.setValue("collapsed", "true" if not self._expanded else "false")
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self.face:
+            if event.type() == QEvent.Type.MouseButtonPress:
+                event.ignore()
+                self._face_pressed(event)
+                return event.isAccepted()
+            if event.type() == QEvent.Type.MouseMove:
+                event.ignore()
+                self._face_move(event)
+                return event.isAccepted()
+            if event.type() == QEvent.Type.MouseButtonRelease:
+                event.ignore()
+                self._face_release(event)
+                return event.isAccepted()
+        return super().eventFilter(watched, event)
 
     def _face_pressed(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -428,21 +470,30 @@ class MascotWindow(QWidget):
         super().keyPressEvent(event)
 
     def toggle_visibility(self) -> None:
-        # A API pode ocultar a janela pelo Win32; consulte o estado nativo,
-        # não apenas o estado em cache do QWidget.
+        """Alt+C alterna o mascote; ocultar durante uma tarefa cancela-a."""
+        visible = self.isVisible()
         if hasattr(ctypes, "windll"):
             user32 = ctypes.windll.user32
             hwnd = int(self.winId())
-            if user32.IsWindowVisible(hwnd):
-                user32.ShowWindow(hwnd, 0)  # SW_HIDE
-            else:
-                user32.ShowWindow(hwnd, 5)  # SW_SHOW
-                user32.SetForegroundWindow(hwnd)
-            return
-        if self.isVisible():
+            visible = bool(user32.IsWindowVisible(hwnd))
+
+        if visible:
+            if self.worker is not None and self.worker.isRunning():
+                self.worker.cancel()
+                self.transcript.append(
+                    '<p style="color:#e8b76b"><b>Noite</b><br>Tarefa cancelada por Alt+C.</p>'
+                )
+                self._set_state("idle")
             self.hide()
-        else:
-            self.show()
+            return
+
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        if hasattr(ctypes, "windll"):
+            ctypes.windll.user32.SetForegroundWindow(int(self.winId()))
+        if self._expanded:
+            self.input.setFocus()
 
     def expand(self) -> None:
         self._expanded = True
@@ -567,7 +618,8 @@ class MascotWindow(QWidget):
         self.worker = None
         if worker is not None:
             worker.deleteLater()
-        self.refresh_diagnostics()
+        if not self._close_pending:
+            self.refresh_diagnostics()
         self._maybe_close()
 
     def _maybe_close(self) -> None:
@@ -580,9 +632,14 @@ class MascotWindow(QWidget):
         if not worker_running and not diagnostics_running:
             self.close()
 
+    def close_event(self) -> None:
+        """Solicita o fechamento normal da janela e a limpeza dos workers."""
+        self.close()
+
     def closeEvent(self, event: QCloseEvent) -> None:
         self._save_position()
         self.diagnostics_timer.stop()
+        self.face.timer.stop()
         if hasattr(self, "hotkey") and self.hotkey.isRunning() and not self.hotkey.stop():
             event.ignore()
             QTimer.singleShot(100, self.close)
@@ -611,5 +668,5 @@ def run_mascot() -> int:
         app.setWindowIcon(QIcon(str(icon_path)))
     service = AssistantService(settings)
     window = MascotWindow(service)
-    window.show()
+    window.hide()
     return app.exec()

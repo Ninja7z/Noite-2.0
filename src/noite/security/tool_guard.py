@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 from collections.abc import Callable
 from typing import Any
@@ -33,9 +34,10 @@ class ToolGuard:
         executor: Callable[..., Any],
         *,
         approval_token: str | None = None,
+        session_id: str | None = None,
     ) -> Any:
-        decision = self.policy.authorize(request, approval_token, self.approvals)
-        self.audit.record(request, decision)
+        decision = self.policy.authorize(request, approval_token, self.approvals, session_id)
+        audit_id = self.audit.record(request, decision)
         if decision.decision != DecisionKind.ALLOW:
             raise ToolDenied(decision.reason)
 
@@ -54,22 +56,29 @@ class ToolGuard:
             result = executor(**request.arguments)
         except Exception as exc:
             self.audit.record_execution_result(
-                request, succeeded=False, error_type=type(exc).__name__
+                request, succeeded=False, error_type=type(exc).__name__, audit_id=audit_id
             )
             raise
 
         if inspect.isawaitable(result):
-            return self._await_and_record(result, request)
-        self.audit.record_execution_result(request, succeeded=True)
+            return self._await_and_record(result, request, audit_id)
+        self.audit.record_execution_result(request, succeeded=True, audit_id=audit_id)
         return result
 
-    async def _await_and_record(self, result: Any, request: ActionRequest) -> Any:
+    async def _await_and_record(
+        self, result: Any, request: ActionRequest, audit_id: int | None = None
+    ) -> Any:
         try:
             value = await result
-        except Exception as exc:
+        except asyncio.CancelledError:
             self.audit.record_execution_result(
-                request, succeeded=False, error_type=type(exc).__name__
+                request, status="cancelled", error_type="CancelledError", audit_id=audit_id
             )
             raise
-        self.audit.record_execution_result(request, succeeded=True)
+        except Exception as exc:
+            self.audit.record_execution_result(
+                request, succeeded=False, error_type=type(exc).__name__, audit_id=audit_id
+            )
+            raise
+        self.audit.record_execution_result(request, succeeded=True, audit_id=audit_id)
         return value

@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from .audit_logger import AuditLogger
 from .models import Capability, PermissionProfile
-from .permission_manager import PermissionManager
+from .permission_manager import RESTRICTED_CAPABILITIES, PermissionManager
 
 _CAPABILITY_LABELS = {
     Capability.FILE_READ: "Ler arquivos em diretórios autorizados",
@@ -27,9 +27,6 @@ _CAPABILITY_LABELS = {
     Capability.NETWORK: "Acessar rede e serviços externos",
     Capability.MCP: "Chamar ferramentas MCP",
 }
-
-_RESTRICTED_CAPABILITIES = {Capability.FILE_READ, Capability.FILE_WRITE}
-
 
 class SecuritySettingsDialog(QDialog):
     """Trusted, user-operated editor for the local permission policy."""
@@ -94,7 +91,7 @@ class SecuritySettingsDialog(QDialog):
                 profile == PermissionProfile.FULL
                 or (
                     profile == PermissionProfile.RESTRICTED
-                    and capability in _RESTRICTED_CAPABILITIES
+                    and capability in RESTRICTED_CAPABILITIES
                 )
             )
             checkbox.setEnabled(allowed_in_profile)

@@ -46,11 +46,12 @@ class PolicyEngine:
         request: ActionRequest,
         approval_token: str | None = None,
         approvals: ApprovalManager | None = None,
+        session_id: str | None = None,
     ) -> PolicyDecision:
         decision = self.evaluate(request)
         if decision.decision != DecisionKind.REQUIRE_APPROVAL:
             return decision
-        if approvals is not None and approvals.consume(request, approval_token):
+        if approvals is not None and approvals.consume(request, approval_token, session_id or ""):
             return PolicyDecision(
                 decision=DecisionKind.ALLOW,
                 reason="Ação aprovada pelo usuário para esta solicitação exata.",

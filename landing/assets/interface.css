@@ -1,0 +1,10 @@
+/* Noite: áreas secundárias (Projetos, Memória, Ferramentas, Configurações). */
+.chat-column:not([data-view="chat"]) .messages,
+.chat-column:not([data-view="chat"]) .composer-wrap{display:none}
+
+.workspace-placeholder{flex:1;min-height:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:40px 24px;text-align:center}
+.chat-column:not([data-view="chat"]) .workspace-placeholder{display:flex}
+.workspace-placeholder .placeholder-icon{width:52px;height:52px;display:grid;place-items:center;border:1px solid var(--line);border-radius:16px;color:var(--accent);font-size:20px}
+.workspace-placeholder h1{margin:14px 0 0;font-family:var(--font-display);font-weight:400;font-size:30px;letter-spacing:-.4px}
+.workspace-placeholder p{max-width:420px;margin:0;color:var(--muted);font-size:15px;line-height:1.7}
+.workspace-placeholder .placeholder-state{font-size:12px;color:var(--faint)}

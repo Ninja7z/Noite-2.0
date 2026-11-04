@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import stat
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -53,8 +54,9 @@ _KNOWN_TOKEN = re.compile(
 )
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b")
 _QUOTED_SECRET = re.compile(
-    r"(?i)\b([A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|TOKEN|SECRET|PASSWORD|"
-    r"CREDENTIALS?)[A-Z0-9_]*)\b(\s*[:=]\s*)(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')"
+    r"(?i)([\"']?)([A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|TOKEN|SECRET|PASSWORD|"
+    r"CREDENTIALS?)[A-Z0-9_]*)([\"']?)(\s*[:=]\s*)"
+    r"(\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')"
 )
 
 
@@ -76,13 +78,105 @@ class SearchMatch:
 
 def resolve_workspace_path(workspace: Path, candidate: Path) -> Path:
     root = Path(workspace).resolve(strict=True)
-    path = Path(candidate)
-    if not path.is_absolute():
-        path = root / path
-    resolved = path.resolve(strict=True)
+    raw = Path(candidate)
+    target = raw if raw.is_absolute() else root / raw
+
+    # Resolve without following symlinks first to detect them
+    try:
+        resolved_no_follow = target.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("Não foi possível validar o caminho solicitado.") from exc
+
+    # Check if resolved path is within root
+    if not resolved_no_follow.is_relative_to(root):
+        raise ValueError("O caminho está fora do projeto aberto.")
+
+    # Walk the path components to detect symlinks/junctions before the final resolve
+    current = root
+    try:
+        relative = target.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("O caminho está fora do projeto aberto.") from exc
+
+    for part in relative.parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            raise ValueError("Travessia de diretório não é permitida.")
+        current = current / part
+        is_junction = getattr(current, "is_junction", lambda: False)()
+        if current.is_symlink() or is_junction:
+            raise ValueError("Links simbólicos e junctions não são permitidos.")
+
+    # Final resolve with strict=True (safe now that we've verified no symlinks)
+    try:
+        resolved = target.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("Não foi possível validar o caminho solicitado.") from exc
+
     if not resolved.is_relative_to(root):
         raise ValueError("O caminho está fora do projeto aberto.")
     return resolved
+
+
+def _read_workspace_bytes(path: Path, root: Path) -> bytes:
+    """Read through an opened handle and verify its final target before reading."""
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("Selecione um arquivo regular do workspace.")
+        if info.st_size > MAX_TEXT_FILE_BYTES:
+            raise ValueError("O arquivo excede o limite de 1 MB nesta versão.")
+        if os.name == "nt":
+            import ctypes
+            import msvcrt
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            get_final_path = kernel32.GetFinalPathNameByHandleW
+            get_final_path.argtypes = [
+                wintypes.HANDLE,
+                wintypes.LPWSTR,
+                wintypes.DWORD,
+                wintypes.DWORD,
+            ]
+            get_final_path.restype = wintypes.DWORD
+            buffer = ctypes.create_unicode_buffer(32_768)
+            length = get_final_path(
+                wintypes.HANDLE(msvcrt.get_osfhandle(descriptor)),
+                buffer,
+                len(buffer),
+                0,
+            )
+            if not length or length >= len(buffer):
+                raise OSError(
+                    ctypes.get_last_error(),
+                    "Não foi possível validar o caminho final do arquivo.",
+                )
+            final_name = buffer.value
+            if final_name.startswith("\\\\?\\UNC\\"):
+                final_name = "\\\\" + final_name[8:]
+            elif final_name.startswith("\\\\?\\"):
+                final_name = final_name[4:]
+            final_path = Path(final_name)
+        else:
+            descriptor_path = Path(f"/proc/self/fd/{descriptor}")
+            final_path = (
+                Path(os.path.realpath(descriptor_path))
+                if descriptor_path.exists()
+                else Path(os.path.realpath(path))
+            )
+        if not final_path.is_relative_to(root.resolve(strict=True)):
+            raise ValueError("O arquivo foi redirecionado para fora do workspace.")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            data = stream.read(MAX_TEXT_FILE_BYTES + 1)
+        if len(data) > MAX_TEXT_FILE_BYTES:
+            raise ValueError("O arquivo excede o limite de 1 MB nesta versão.")
+        return data
+    finally:
+        os.close(descriptor)
 
 
 def _is_sensitive(path: Path) -> bool:
@@ -103,9 +197,7 @@ def read_workspace_text(workspace: Path, candidate: Path) -> OpenedTextFile:
         raise ValueError("Arquivos de credenciais e segredos não podem ser abertos.")
     if not path.is_file():
         raise ValueError("Selecione um arquivo regular do projeto.")
-    if path.stat().st_size > MAX_TEXT_FILE_BYTES:
-        raise ValueError("O arquivo excede o limite de 1 MB nesta versão.")
-    raw = path.read_bytes()
+    raw = _read_workspace_bytes(path, Path(workspace).resolve(strict=True))
     if b"\0" in raw:
         raise ValueError("Arquivos binários não podem ser abertos no editor de texto.")
     has_utf8_bom = raw.startswith(b"\xef\xbb\xbf")
@@ -246,8 +338,8 @@ def search_workspace_text(
                 if files_scanned >= MAX_SEARCH_FILES or bytes_scanned + size > MAX_SEARCH_BYTES:
                     progress("Limite de varredura atingido; resultados parciais exibidos.")
                     return matches
-                raw = path.read_bytes()
-            except OSError:
+                raw = _read_workspace_bytes(path, root)
+            except (OSError, ValueError):
                 continue
             files_scanned += 1
             bytes_scanned += len(raw)
@@ -352,8 +444,8 @@ def retrieve_workspace_context(
                     size = path.stat().st_size
                     if size > MAX_TEXT_FILE_BYTES or scanned_bytes + size > 20_000_000:
                         continue
-                    raw = path.read_bytes()
-                except OSError:
+                    raw = _read_workspace_bytes(path, root)
+                except (OSError, ValueError):
                     continue
                 scanned_files += 1
                 scanned_bytes += len(raw)
@@ -385,6 +477,7 @@ def retrieve_workspace_context(
 
 
 def _redact_secret_values(text: str) -> str:
+    text = _redact_yaml_block_secrets(text)
     text = _PRIVATE_KEY_BLOCK.sub("[REDACTED PRIVATE KEY]", text)
     text = _URL.sub(_redact_url, text)
     text = _QUOTED_SECRET.sub(_redact_quoted_secret, text)
@@ -396,11 +489,11 @@ def _redact_secret_values(text: str) -> str:
 
 
 def _redact_quoted_secret(match: re.Match[str]) -> str:
-    name, separator, value = match.groups()
+    key_prefix, name, key_suffix, separator, value = match.groups()
     if not _is_sensitive_secret_name(name) or _is_placeholder_secret(value):
         return match.group(0)
     quote = value[:1] if value[:1] in {"'", '"'} else ""
-    return f"{name}{separator}{quote}[REDACTED]{quote}"
+    return f"{key_prefix}{name}{key_suffix}{separator}{quote}[REDACTED]{quote}"
 
 
 def _redact_secret_assignment(match: re.Match[str]) -> str:
@@ -505,6 +598,46 @@ def _redact_sensitive_assignments(text: str) -> str:
             break
         lines.append(body + line_ending)
     return "".join(lines)
+
+
+def _redact_yaml_block_secrets(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    output: list[str] = []
+    index = 0
+    marker = re.compile(
+        r"^(\s*)([\"']?)([A-Za-z_][A-Za-z0-9_-]*)([\"']?)\s*:\s*([|>][+-]?)\s*(#.*)?$"
+    )
+    while index < len(lines):
+        line = lines[index]
+        body = line.rstrip("\r\n")
+        ending = line[len(body) :]
+        match = marker.match(body)
+        if not match or not _is_sensitive_secret_name(match.group(3)):
+            output.append(line)
+            index += 1
+            continue
+        indent, key_prefix, key, key_suffix, _block_marker, comment = match.groups()
+        output.append(
+            f"{indent}{key_prefix}{key}{key_suffix}: [REDACTED]"
+            + (f" {comment}" if comment else "")
+            + ending
+        )
+        parent_indent = len(indent)
+        index += 1
+        while index < len(lines):
+            nested = lines[index]
+            nested_body = nested.rstrip("\r\n")
+            nested_ending = nested[len(nested_body) :]
+            nested_indent = len(nested_body) - len(nested_body.lstrip())
+            if not nested_body.strip():
+                output.append(nested)
+                index += 1
+                continue
+            if nested_indent <= parent_indent:
+                break
+            output.append(nested_body[:nested_indent] + "[REDACTED]" + nested_ending)
+            index += 1
+    return "".join(output)
 
 
 def _is_within_workspace(path: Path, root: Path) -> bool:

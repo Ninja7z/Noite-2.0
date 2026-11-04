@@ -7,7 +7,22 @@ from pathlib import Path
 
 from .models import Capability, PermissionProfile
 
-_RESTRICTED_CAPABILITIES = {Capability.FILE_READ, Capability.FILE_WRITE}
+# Single source of truth for the read/write-only profile used by the core and the UI.
+RESTRICTED_CAPABILITIES = frozenset({Capability.FILE_READ, Capability.FILE_WRITE})
+
+# Profile ordering from least to most permissive; the only place that defines it.
+PROFILE_ORDER: tuple[PermissionProfile, ...] = (
+    PermissionProfile.NONE,
+    PermissionProfile.RESTRICTED,
+    PermissionProfile.FULL,
+)
+
+
+def profile_allows(
+    requested: PermissionProfile, current: PermissionProfile = PermissionProfile.NONE
+) -> bool:
+    """True when `current` already grants at least the `requested` profile level."""
+    return PROFILE_ORDER.index(current) >= PROFILE_ORDER.index(requested)
 
 
 class PermissionManager:
@@ -35,11 +50,19 @@ class PermissionManager:
             self.profile = PermissionProfile.NONE
             self.enabled = set()
 
+    def reload(self) -> None:
+        """Re-read the policy from disk.
+
+        Revocation made in the settings UI must beat a stale in-memory snapshot,
+        so every decision path refreshes before evaluating and before dispatch.
+        """
+        self._load()
+
     def is_enabled(self, capability: Capability) -> bool:
         if self.profile == PermissionProfile.NONE:
             return False
         if self.profile == PermissionProfile.RESTRICTED:
-            return capability in self.enabled and capability in _RESTRICTED_CAPABILITIES
+            return capability in self.enabled and capability in RESTRICTED_CAPABILITIES
         return capability in self.enabled
 
     def save_from_user(
@@ -50,7 +73,7 @@ class PermissionManager:
         if profile == PermissionProfile.NONE:
             normalized.clear()
         elif profile == PermissionProfile.RESTRICTED:
-            normalized.intersection_update(_RESTRICTED_CAPABILITIES)
+            normalized.intersection_update(RESTRICTED_CAPABILITIES)
         payload = {
             "schema_version": 1,
             "profile": profile.value,
@@ -74,3 +97,8 @@ class PermissionManager:
             raise
         self.profile = profile
         self.enabled = normalized
+
+
+def permission_manager_for_path(config_path: Path) -> PermissionManager:
+    """Cria o gestor de permissões no limite confiável do pacote de segurança."""
+    return PermissionManager(config_path)

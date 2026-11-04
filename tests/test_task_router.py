@@ -1,7 +1,13 @@
 import pytest
 
 from noite.config import Settings
-from noite.task_router import TaskCategory, classify_task, is_model_compatible, route_model
+from noite.task_router import (
+    TaskCategory,
+    classify_task,
+    get_model_category,
+    is_model_compatible,
+    route_model,
+)
 
 
 def test_classify_supported_auxiliary_tasks_deterministically():
@@ -146,3 +152,15 @@ def test_model_compatibility_reads_parameter_count_after_tag_not_model_family():
     assert is_model_compatible("qwen2.5-coder:7b-instruct-q4_K_M", 6, 16)
     assert not is_model_compatible("qwen2.5-coder:13b-instruct-q4_K_M", 6, 16)
     assert is_model_compatible("llama3.2:3b", 6, 16)
+
+
+def test_model_category_parses_quantized_ollama_tags():
+    compatible, category = get_model_category("qwen2.5-coder:7b-instruct-q4_K_M", 6, 16)
+    assert compatible is True
+    assert category in {"confortavel", "limitado", "inviavel"}
+
+
+def test_model_category_marks_unknown_parameter_size_as_indeterminate():
+    compatible, category = get_model_category("custom-model-without-size-tag", 6, 16)
+    assert compatible is None
+    assert category == "indeterminado"
