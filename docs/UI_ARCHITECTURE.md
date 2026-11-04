@@ -49,19 +49,22 @@ resumo legível da ação (o que, onde, com quais parâmetros), origem do pedido
 botões explícitos. Negação é registrada em auditoria e exibida inline — nunca em
 modal bloqueante (já corrigido no legado).
 
-## Decisão pendente: a IDE entra no mascote?
+## IDE no mascote — decidido (ADR-006)
 
-Esta é a única decisão de interface que **não** está fechada. Opções:
+Decisão: **opção A** — o mascote expande para um painel com abas
+(Conversa · Atividade · Projeto), implementado em fatias: (1) árvore + leitura,
+(2) edição com aprovação e undo, (3) terminal atrás do `ToolGuard`.
+Detalhes, alternativas e critério de revisão em
+[ADR-006](ADR/006-ide-no-mascote.md).
 
-| Opção | Descrição | Consequência |
+| Opção | Descrição | Estado |
 |---|---|---|
-| A | Mascote expande para painel com abas (Conversa / Atividade / Projeto) | mantém uma única janela; exige portar `ide.py` para o novo fluxo |
-| B | Mascote + janela de projeto separada, aberta sob demanda | menos risco de regressão visual; duas janelas |
-| C | Mascote só conversa; projeto continua exclusivo do legado | mais simples, porém o usuário precisa de duas interfaces (contradiz "mascote é a experiência principal") |
+| A | Mascote expande para painel com abas (Conversa / Atividade / Projeto) | **escolhida** |
+| B | Mascote + janela de projeto separada | contingência registrada |
+| C | Mascote só conversa; projeto continua exclusivo do legado | rejeitada (contraria ADR-002) |
 
-Recomendação técnica: **A**, em fatias (primeiro árvore + visualização read-only,
-depois edição), porque B/C mantêm a fragmentação que a visão de produto quer
-eliminar. A escolha é do proprietário e deve ser registrada em ADR antes da Fase 5.
+Enquanto a paridade não existir, o `ProjectDock` do legado permanece funcional e
+intocado.
 
 ## Dívidas de interface
 
