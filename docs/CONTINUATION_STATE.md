@@ -1,5 +1,10 @@
 # Estado de continuidade — evolução Noite 2.0
 
+> **Histórico (não normativo).** Este documento registra o estado de uma data
+> específica; hashes, branch e contagens de teste podem não corresponder ao HEAD.
+> Para arquitetura e ordem de trabalho, use [README.md](README.md),
+> [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md) e [ADR/](ADR/).
+
 Atualizado em 2026-11-02 antes da publicação da branch.
 
 ## Ambiente preservado
