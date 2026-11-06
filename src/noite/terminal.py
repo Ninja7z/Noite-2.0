@@ -255,7 +255,7 @@ def _validate_powershell_ast(command: str) -> str:
             input=command,
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=30,
             env=environment,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             check=False,
