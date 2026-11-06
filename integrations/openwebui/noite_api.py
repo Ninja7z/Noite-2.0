@@ -739,6 +739,21 @@ async def health() -> dict[str, object]:
     return {"status": "ok", "service": "Noite 2.0"}
 
 
+async def _ollama_health() -> tuple[bool, bool]:
+    """Check Ollama readiness separately from the Noite web process."""
+    base_url = str(getattr(service.settings, "ollama_base_url", OLLAMA_BASE_URL)).rstrip("/")
+    try:
+        timeout = httpx.Timeout(1.5, connect=0.5)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(f"{base_url}/api/tags")
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError, TypeError):
+        return False, False
+    models = payload.get("models", []) if isinstance(payload, dict) else []
+    return True, isinstance(models, list) and bool(models)
+
+
 async def _ollama_installed_models() -> list[dict[str, object]]:
     """Consulta o Ollama local e retorna os modelos instalados no formato OpenAI."""
     try:
@@ -1390,6 +1405,24 @@ async def web_chat(body: dict, request: Request, session: dict = Depends(_web_se
         cid == conversation_id for cid, _, _ in service.conversations()
     ):
         raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+    if getattr(service.settings, "provider_mode", "nightly") != "cloud":
+        ollama_online, has_models = await _ollama_health()
+        if not ollama_online:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "O Ollama não está respondendo. Verifique se o serviço local "
+                    "está iniciado e tente novamente."
+                ),
+            )
+        if not has_models:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "O Ollama está online, mas nenhum modelo está instalado. "
+                    "Instale ou selecione um modelo antes de conversar."
+                ),
+            )
     session["active"] = conversation_id
     history = await asyncio.to_thread(service.history, conversation_id, 12)
     queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
@@ -1454,10 +1487,43 @@ async def web_chat(body: dict, request: Request, session: dict = Depends(_web_se
             if not task.done():
                 task.cancel()
             raise
+        except TimeoutError:
+            yield packet(
+                "error",
+                {
+                    "message": (
+                        "A resposta demorou além do limite de processamento. "
+                        "Tente novamente; o histórico foi preservado."
+                    )
+                },
+            )
+        except RuntimeError as exc:
+            detail = str(exc).casefold()
+            if "tempo limite" in detail or "timeout" in detail:
+                message = (
+                    "O modelo demorou demais para responder. "
+                    "Tente novamente ou reduza a complexidade do pedido."
+                )
+            elif "conectar ao ollama" in detail or "conectar ao provedor" in detail:
+                message = (
+                    "Não consegui alcançar o Ollama. "
+                    "Verifique se o serviço local continua ativo."
+                )
+            else:
+                message = (
+                    "O modelo encontrou uma falha ao gerar a resposta. "
+                    "Tente novamente em instantes."
+                )
+            yield packet("error", {"message": message})
         except Exception:
             yield packet(
                 "error",
-                {"message": "A Noite não conseguiu concluir a resposta. Verifique o modelo local."},
+                {
+                    "message": (
+                        "A Noite não conseguiu concluir a resposta. "
+                        "Verifique a conexão com o modelo e tente novamente."
+                    )
+                },
             )
         finally:
             if not task.done():
@@ -1545,10 +1611,17 @@ async def _web_security_headers(request: Request, call_next):
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    # Revalidate static assets so browsers do not keep stale CSS/JS.
+    response.headers.setdefault("Cache-Control", "no-cache")
+    content_type = response.headers.get("Content-Type", "")
+    media_type = content_type.partition(";")[0].strip().lower()
+    if media_type.startswith("text/") and "charset=" not in content_type.casefold():
+        response.headers["Content-Type"] = f"{content_type}; charset=utf-8"
     response.headers.setdefault(
         "Content-Security-Policy",
         "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
-        "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; "
+        "font-src 'self'; connect-src 'self' https://api.open-meteo.com "
+        "https://geocoding-api.open-meteo.com; object-src 'none'; base-uri 'self'; "
         "frame-ancestors 'none'; form-action 'self'",
     )
     return response

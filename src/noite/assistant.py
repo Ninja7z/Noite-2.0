@@ -616,12 +616,12 @@ class AssistantService:
             else:
                 answer = await request_model("local")
         except asyncio.CancelledError:
-            if partial:
-                self._save_turn(
-                    conversation_id,
-                    text,
-                    "".join(partial) + "\n\n[resposta parcial: geração cancelada]",
-                )
+            cancelled_answer = (
+                "".join(partial) + "\n\n[resposta parcial: geração cancelada]"
+                if partial
+                else "[geração cancelada antes da primeira resposta]"
+            )
+            self._save_turn(conversation_id, text, cancelled_answer)
             raise
         except Exception:
             if partial:

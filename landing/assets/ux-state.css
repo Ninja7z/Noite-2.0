@@ -1,0 +1,9 @@
+/* Feedback de geração e cancelamento da Noite */
+.send-btn.is-stop{background:var(--error);color:#fff;opacity:1}
+.send-btn.is-stop:hover{filter:brightness(1.08)}
+.message-cancelled .message-content{color:var(--muted)}
+.message-status{display:block;margin-top:8px;color:var(--error);font-size:12px;line-height:1.5}
+.message-cancelled .message-status{color:var(--muted)}
+.message.pending .message-meta{color:var(--accent)}
+.message-retry{display:inline-flex;align-items:center;gap:6px;margin-top:10px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--raised);color:var(--text);font-size:12px}
+.message-retry:hover{border-color:var(--accent);color:var(--accent)}

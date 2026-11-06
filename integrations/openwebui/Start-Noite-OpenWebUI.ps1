@@ -1,21 +1,24 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [switch]$NoBrowser
 )
 
 $ErrorActionPreference = "Stop"
 
-$ProjectRoot = "C:\Users\crist\Noite-2.0-worktrees\stabilize-core-lab-1d2bbe70186b491093ebdb2b7307e001"
-$ApiHome = Join-Path $env:LOCALAPPDATA "NoiteAPI"
-$WebHome = Join-Path $env:LOCALAPPDATA "OpenWebUI"
-$ApiPython = Join-Path $ApiHome "venv\Scripts\python.exe"
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$NoiteRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..")).Path
+$DataRoot = Join-Path $NoiteRoot "Permanentes\Dados"
+$ApiHome = Join-Path $DataRoot "NoiteAPI"
+$WebHome = Join-Path $DataRoot "OpenWebUI"
+$ApiPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $WebCli = Join-Path $WebHome "venv\Scripts\open-webui.exe"
-$ApiScript = Join-Path $ProjectRoot "integrations\openwebui\noite_api.py"
+$ApiScript = Join-Path $PSScriptRoot "noite_api.py"
 $KeyFile = Join-Path $ApiHome "openwebui_api_key.txt"
-$LogDir = Join-Path $ApiHome "logs"
+$WebSecretFile = Join-Path $WebHome "webui_secret_key.txt"
+$LogDir = Join-Path $NoiteRoot "Temporarios\Logs\NoiteAPI"
 $WebData = Join-Path $WebHome "data"
 
-New-Item -ItemType Directory -Force -Path $LogDir, $WebData | Out-Null
+New-Item -ItemType Directory -Force -Path $ApiHome, $WebHome, $LogDir, $WebData | Out-Null
 
 foreach ($required in @($ApiPython, $WebCli, $ApiScript)) {
     if (-not (Test-Path $required)) {
@@ -32,6 +35,16 @@ if (-not (Test-Path $KeyFile)) {
 }
 $ApiKey = (Get-Content -Raw $KeyFile).Trim()
 if ($ApiKey.Length -lt 40) { throw "A chave local da API da Noite está inválida." }
+
+if (-not (Test-Path $WebSecretFile)) {
+    $bytes = New-Object byte[] 64
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    [System.IO.File]::WriteAllText($WebSecretFile, [Convert]::ToBase64String($bytes))
+}
+$WebSecret = (Get-Content -Raw $WebSecretFile).Trim()
+if ($WebSecret.Length -lt 64) { throw "Persistent Open WebUI secret key is invalid." }
+
 
 function Test-LocalPort([int]$Port) {
     $client = New-Object System.Net.Sockets.TcpClient
@@ -78,7 +91,7 @@ if (Test-LocalPort 8765) {
     $env:NOITE_OPENWEBUI_API_KEY = $ApiKey
     $ApiOut = Join-Path $LogDir "api.out.log"
     $ApiErr = Join-Path $LogDir "api.err.log"
-    Start-Process -FilePath $ApiPython -ArgumentList @($ApiScript) -WorkingDirectory $ProjectRoot -WindowStyle Hidden -RedirectStandardOutput $ApiOut -RedirectStandardError $ApiErr | Out-Null
+    Start-Process -FilePath $ApiPython -ArgumentList @("`"$ApiScript`"") -WorkingDirectory $ProjectRoot -WindowStyle Hidden -RedirectStandardOutput $ApiOut -RedirectStandardError $ApiErr | Out-Null
 }
 
 $apiReady = $false
@@ -90,6 +103,7 @@ if (-not $apiReady) { throw "A API da Noite não iniciou ou não passou no healt
 
 # 2) Open WebUI: somente localhost, persistência própria e modelo Noite pré-configurado.
 $env:DATA_DIR = $WebData
+$env:WEBUI_SECRET_KEY = $WebSecret
 $env:OPENAI_API_BASE_URLS = "http://127.0.0.1:8765/v1"
 $env:OPENAI_API_KEYS = $ApiKey
 # Mostra os modelos locais do Ollama junto ao adaptador da Noite.

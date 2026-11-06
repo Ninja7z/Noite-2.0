@@ -18,6 +18,10 @@ from fastapi.testclient import TestClient  # noqa: E402
 @pytest.fixture
 def web_client(tmp_path, monkeypatch):
     monkeypatch.setattr(noite_api.service, "database_path", tmp_path / "web.sqlite3")
+    monkeypatch.setattr(noite_api.service.settings, "provider_mode", "nightly")
+    async def ollama_ready():
+        return True, True
+    monkeypatch.setattr(noite_api, "_ollama_health", ollama_ready)
     with TestClient(noite_api.app, base_url="http://127.0.0.1") as client:
         yield client
 
@@ -93,3 +97,21 @@ def test_web_chat_stream_and_conversation_lifecycle(web_client: TestClient) -> N
     )
     assert deleted.status_code == 200
     assert deleted.json()["active_conversation_id"] != conversation_id
+
+def test_web_chat_reports_ollama_offline_before_starting_generation(
+    web_client: TestClient, monkeypatch
+) -> None:
+    async def ollama_offline():
+        return False, False
+    monkeypatch.setattr(noite_api, "_ollama_health", ollama_offline)
+    headers = _session(web_client)
+    created = web_client.post("/web/api/conversations", headers=headers)
+    conversation_id = created.json()["id"]
+
+    response = web_client.post(
+        "/web/api/chat",
+        json={"message": "Teste de conexão", "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert response.status_code == 503
+    assert "Ollama não está respondendo" in response.json()["detail"]
