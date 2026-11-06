@@ -6,15 +6,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = $PSScriptRoot
+$NoiteRoot = (Resolve-Path (Join-Path $ProjectRoot "..\..")).Path
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $ApiDirectory = Join-Path $ProjectRoot "integrations\openwebui"
-$LogDirectory = Join-Path $env:LOCALAPPDATA "NoiteAPI\logs"
-$StateDirectory = Join-Path $env:LOCALAPPDATA "NoiteAPI"
+$LogDirectory = Join-Path $NoiteRoot "Temporarios\Logs\NoiteAPI"
+$StateDirectory = Join-Path $NoiteRoot "Permanentes\Dados\NoiteAPI"
 $StateFile = Join-Path $StateDirectory "run_noite-processes.json"
 $env:PYTHONPATH = "$(Join-Path $ProjectRoot 'src');$ApiDirectory;$env:PYTHONPATH"
 
 $Services = @(
-    @{ Name = "Noite Web"; Port = 8766; Args = @("-m", "uvicorn", "noite_api:app", "--host", "127.0.0.1", "--port", "8766"); Cwd = $ApiDirectory }
+    @{ Name = "Noite Web"; Port = 8766; Args = @("-m", "uvicorn", "noite_api:app", "--host", "0.0.0.0", "--port", "8766"); Cwd = $ApiDirectory }
 )
 $StatusServices = @(
     @{ Name = "OpenWebUI API"; Port = 8765 },
@@ -24,7 +25,7 @@ $StatusServices = @(
     @{ Name = "Open WebUI"; Port = 8080 },
     @{ Name = "Ollama"; Port = 11434 }
 )
-$McpLauncher = Join-Path $StateDirectory "config\start_mcp_servers.ps1"
+$McpLauncher = Join-Path $ProjectRoot "scripts\start_mcp_servers.ps1"
 $OpenWebUiLauncher = Join-Path $ApiDirectory "Start-Noite-OpenWebUI.ps1"
 
 function Test-LocalPort([int]$Port) {
@@ -55,9 +56,7 @@ if (-not (Test-Path (Join-Path $ProjectRoot ".env"))) {
 }
 if (-not (Test-Path $McpLauncher)) { throw "Inicializador MCP não encontrado: $McpLauncher" }
 if (-not (Test-Path $OpenWebUiLauncher)) { throw "Inicializador Open WebUI não encontrado: $OpenWebUiLauncher" }
-if (-not (Test-Path $LogDirectory)) {
-    New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
-}
+New-Item -ItemType Directory -Path $LogDirectory, $StateDirectory -Force | Out-Null
 
 if ($Status) {
     foreach ($service in $StatusServices) {
@@ -125,5 +124,5 @@ if (-not $?) { throw "Falha ao iniciar a integração Open WebUI." }
 Write-Host "Servidores verificados. Mascote não iniciado; continua independente e usa Alt+C."
 Write-Host "Noite Web: http://127.0.0.1:8766/"
 Write-Host "Open WebUI: http://127.0.0.1:8080/"
-Write-Host "MCP Noite: 127.0.0.1:8767 | MCP Roblox: 127.0.0.1:8768"
+Write-Host "MCP Noite: 127.0.0.1:8767 | MCP Roblox: pending restoration (8768)"
 if ($NoBrowser) { Write-Host "Modo sem navegador solicitado; nenhum app visual foi aberto." }

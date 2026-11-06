@@ -497,8 +497,7 @@ def test_glm_failure_falls_back_to_local_model(tmp_path, monkeypatch):
         glm_enabled=True,
         glm_api_key="synthetic-key-for-test",
         glm_task_categories="summarization",
-    )
-    assistant = AssistantService(settings)
+    )    assistant = AssistantService(settings)
     assistant._save("default", "assistant", "histórico local para fallback")
 
     async def failed_glm(*args, **kwargs):
@@ -513,3 +512,36 @@ def test_glm_failure_falls_back_to_local_model(tmp_path, monkeypatch):
     monkeypatch.setattr(assistant_module, "ask_local_model", local_fallback)
 
     assert asyncio.run(assistant.respond("Resuma um texto público")) == "resumo local"
+
+def test_cancelled_stream_before_first_token_persists_the_user_request(
+    tmp_path, monkeypatch
+) -> None:
+    from noite import assistant as assistant_module
+
+    assistant = AssistantService(Settings(_env_file=None, data_dir=tmp_path))
+    started = asyncio.Event()
+
+    async def fake_model(prompt, *, messages=None, model=None, on_chunk=None):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(assistant_module, "ask_local_model", fake_model)
+
+    async def exercise():
+        task = asyncio.create_task(
+            assistant.respond("pergunta cancelada cedo", on_chunk=lambda _: None)
+        )
+        await started.wait()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return
+        raise AssertionError("a tarefa deveria propagar cancelamento")
+
+    asyncio.run(exercise())
+    with open_database(tmp_path / "noite.sqlite3") as connection:
+        assert recent_messages(connection) == [
+            ("user", "pergunta cancelada cedo"),
+            ("assistant", "[geração cancelada antes da primeira resposta]"),
+        ]

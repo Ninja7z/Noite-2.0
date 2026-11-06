@@ -497,8 +497,7 @@ class AssistantService:
         )
         if (
             provider_mode == "cloud"
-            and model_route.reason != "conteúdo potencialmente sensível"
-            and not sensitive_history
+            and model_route.reason != "conteúdo potencialmente sensível"            and not sensitive_history
         ):
             model_route = type(model_route)(
                 "gemini", model_route.category, "ambiente Cloud selecionado"
@@ -616,12 +615,12 @@ class AssistantService:
             else:
                 answer = await request_model("local")
         except asyncio.CancelledError:
-            if partial:
-                self._save_turn(
-                    conversation_id,
-                    text,
-                    "".join(partial) + "\n\n[resposta parcial: geração cancelada]",
-                )
+            cancelled_answer = (
+                "".join(partial) + "\n\n[resposta parcial: geração cancelada]"
+                if partial
+                else "[geração cancelada antes da primeira resposta]"
+            )
+            self._save_turn(conversation_id, text, cancelled_answer)
             raise
         except Exception:
             if partial:

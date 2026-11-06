@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=Path(__file__).resolve().parents[2] / ".env",
         env_file_encoding="utf-8",
         env_prefix="NOITE_",
         extra="ignore",
@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     vision_model: str = "qwen2.5vl:3b"
     ollama_base_url: str = "http://127.0.0.1:11434"
     model_timeout_seconds: int = Field(default=180, ge=1, le=600)
+    orchestration_timeout_seconds: int = Field(default=240, ge=30, le=900)
     data_dir: Path = Field(default_factory=lambda: Path.home() / ".noite")
     workspace_dir: Path | None = None
     anthropic_model: str | None = None

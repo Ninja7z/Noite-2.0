@@ -5,7 +5,7 @@
   const els = {
     list: $("#conversation-list"), messages: $("#messages"), welcome: $("#welcome"),
     input: $("#message-input"), form: $("#composer"), send: $("#send-btn"),
-    title: $("#current-title"), model: $("#model-status"),
+    title: $("#current-title"), model: $("#model-status"), modelName: $("#model-name"),
     sideStatus: $("#side-status"), presence: $("#presence-indicator"),
     systemTag: $("#system-tag"), systemTitle: $("#system-title"),
     systemDescription: $("#system-description"), activity: $("#activity-list"),
@@ -25,7 +25,7 @@
     options = options || {};
     const headers = new Headers(options.headers || {});
     if (state.csrf && options.method && options.method !== "GET") headers.set("X-Noite-CSRF", state.csrf);
-    if (options.body) headers.set("Content-Type", "application/json");
+    if (options.body) headers.set("Content-Type", "application/json; charset=utf-8");
     const response = await fetch(path, Object.assign({credentials:"same-origin"}, options, {headers}));
     if (!response.ok) {
       let detail = "Falha " + response.status;
@@ -271,7 +271,7 @@
   }
 
   async function selectConversation(id) {
-    if (state.busy || id === state.activeId) { closeMobilePanels(); return; }
+    if (id === state.activeId) { closeMobilePanels(); return; }
     try {
       await api("/web/api/conversations/" + encodeURIComponent(id) + "/select", {method:"POST"});
       state.activeId = id;
@@ -403,20 +403,31 @@
   }
 
   let currentAssistant = null;
-  async function sendMessage(text) {
+  async function sendMessage(text, options) {
+    options = options || {};
     if (state.busy || !text.trim()) return;
+    const requestConversationId = options.conversationId || state.activeId;
     state.busy = true;
-    els.send.disabled = true;
-    els.input.disabled = true;
-    addMessage("user", text.trim());
+    state.abortController = new AbortController();
+    els.send.disabled = false;
+    els.send.textContent = "■";
+    els.send.classList.add("is-stop");
+    els.send.setAttribute("aria-label", "Cancelar geração");
+    els.send.title = "Cancelar resposta";
+    els.input.disabled = false;
+    if (!options.userAlreadyVisible) addMessage("user", text.trim());
     currentAssistant = addMessage("assistant", "", {pending:true});
+    const meta = currentAssistant.querySelector(".message-meta");
+    if (meta) meta.textContent = "Noite · pensando";
     try {
       const response = await api("/web/api/chat", {
-        method:"POST", body:JSON.stringify({message:text.trim(), conversation_id:state.activeId})
+        method:"POST",
+        body:JSON.stringify({message:text.trim(), conversation_id:requestConversationId}),
+        signal:state.abortController.signal
       });
       if (!response.body) throw new Error("O navegador não conseguiu abrir o fluxo de resposta.");
       const reader = response.body.getReader();
-      const decoder = new TextDecoder();
+      const decoder = new TextDecoder("utf-8");
       let buffer = "";
       while (true) {
         const result = await reader.read();
@@ -426,33 +437,67 @@
       }
       buffer += decoder.decode();
       if (buffer.trim()) parseSSE(buffer + "\n\n");
-      if (currentAssistant) currentAssistant.classList.remove("pending");
-      await refreshBootstrap();
-    } catch (error) {
       if (currentAssistant) {
         currentAssistant.classList.remove("pending");
-        currentAssistant.classList.add("message-error");
-        if (!currentAssistant._text.textContent) currentAssistant._text.textContent = error.message;
+        if (meta) meta.textContent = "Noite";
       }
-      toast(error.message, true);
+    } catch (error) {
+      const cancelled = error.name === "AbortError";
+      const message = cancelled
+        ? "Geração interrompida. Você pode continuar a conversa ou tentar novamente."
+        : error.message || "Não foi possível concluir a resposta.";
+      if (currentAssistant) {
+        const hadPartial = Boolean(currentAssistant._text.textContent);
+        currentAssistant.classList.remove("pending");
+        currentAssistant.classList.add(cancelled ? "message-cancelled" : "message-error");
+        if (meta) meta.textContent = cancelled ? "Noite · interrompida" : "Noite · falha";
+        if (!hadPartial) {
+          currentAssistant._text.textContent = message;
+          if (!cancelled) {
+            const retry = document.createElement("button");
+            retry.type = "button";
+            retry.className = "message-retry";
+            retry.textContent = "↻ Tentar novamente";
+            retry.addEventListener("click", () => {
+              retry.remove();
+              sendMessage(text, {
+                conversationId: requestConversationId,
+                userAlreadyVisible: true
+              });
+            });
+            currentAssistant.querySelector(".message-content").append(retry);
+          }
+        } else {
+          const status = document.createElement("small");
+          status.className = "message-status";
+          status.textContent = message;
+          currentAssistant.querySelector(".message-content").append(status);
+        }
+      }
+      toast(cancelled ? "Geração interrompida." : message, !cancelled);
     } finally {
       state.busy = false;
+      state.abortController = null;
       els.send.disabled = false;
+      els.send.textContent = "↑";
+      els.send.classList.remove("is-stop");
+      els.send.setAttribute("aria-label", "Enviar mensagem");
+      els.send.title = "Enviar mensagem";
       els.input.disabled = false;
-      els.input.focus();
       currentAssistant = null;
       await refreshBootstrap().catch(() => {});
+      if (state.activeId === requestConversationId) {
+        await loadMessages(requestConversationId).catch(() => {});
+      }
     }
   }
 
   async function newConversation() {
-    if (state.busy) return;
     try {
       const response = await api("/web/api/conversations", {method:"POST"});
       const item = await response.json();
       state.activeId = item.id;
-      await refreshBootstrap();
-      await loadMessages(state.activeId);
+      await refreshBootstrap();      await loadMessages(state.activeId);
       window.dispatchEvent(new CustomEvent("noite:new-chat"));
       els.input.focus();
       closeMobilePanels();
@@ -486,22 +531,26 @@
 
   els.form.addEventListener("submit", event => {
     event.preventDefault();
+    if (state.busy) {
+      state.abortController?.abort();
+      return;
+    }
     const value = els.input.value;
     if (!value.trim()) return;
     els.input.value = "";
     els.input.style.height = "auto";
-    els.count.textContent = "";
+    if (els.count) els.count.textContent = "";
     sendMessage(value);
   });
   els.input.addEventListener("input", () => {
     els.input.style.height = "auto";
     els.input.style.height = Math.min(160, els.input.scrollHeight) + "px";
-    els.count.textContent = els.input.value.length ? els.input.value.length + "/12000" : "";
+    if (els.count) els.count.textContent = els.input.value.length ? els.input.value.length + "/12000" : "";
   });
   els.input.addEventListener("keydown", event => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      els.form.requestSubmit();
+      if (!state.busy) els.form.requestSubmit();
     }
   });
   $("#new-chat").addEventListener("click", newConversation);
