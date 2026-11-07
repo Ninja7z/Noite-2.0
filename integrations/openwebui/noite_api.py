@@ -19,6 +19,7 @@ import httpx
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
@@ -739,6 +740,19 @@ async def health() -> dict[str, object]:
     return {"status": "ok", "service": "Noite 2.0"}
 
 
+@app.get("/web/api/status")
+async def api_status() -> dict[str, object]:
+    """Estado de saída do backend da Noite para o desktop (sem sessão)."""
+    return {
+        "ok": True,
+        "service": "Noite 2.0",
+        "backend": "noite-api",
+        "backend_version": "2.0.0",
+        "provider_mode": getattr(service.settings, "provider_mode", "nightly"),
+        "message_limit": 12000,
+    }
+
+
 async def _ollama_health() -> tuple[bool, bool]:
     """Check Ollama readiness separately from the Noite web process."""
     base_url = str(getattr(service.settings, "ollama_base_url", OLLAMA_BASE_URL)).rstrip("/")
@@ -910,9 +924,7 @@ async def chat_completions(
 
         tool_calls = tool_message.get("tool_calls", [])
         required_tool_name = (
-            tool_choice.get("function", {}).get("name")
-            if isinstance(tool_choice, dict)
-            else None
+            tool_choice.get("function", {}).get("name") if isinstance(tool_choice, dict) else None
         )
         if (tool_choice == "required" or required_tool_name) and not tool_calls:
             raise HTTPException(
@@ -1345,15 +1357,49 @@ async def web_bootstrap(session: dict = Depends(_web_session)):
     }
 
 
+class FeedbackPayload(BaseModel):
+    message_id: int
+    rating: str | None = None
+
+
+@_web_router.post("/web/api/feedback")
+async def web_feedback(payload: FeedbackPayload, session: dict = Depends(_web_session)):
+    if payload.message_id <= 0:
+        raise HTTPException(status_code=400, detail="message_id inválido.")
+    if payload.rating not in (None, "", "positive", "negative"):
+        raise HTTPException(status_code=400, detail="Rating inválido.")
+    active = session.get("active", "default")
+    record = await asyncio.to_thread(service.get_message_record, payload.message_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Mensagem não encontrada.")
+    if record["conversation_id"] != active:
+        raise HTTPException(status_code=403, detail="Mensagem não pertence à conversa ativa.")
+    if record["role"] != "assistant":
+        raise HTTPException(
+            status_code=400, detail="Apenas respostas da Noite podem receber feedback."
+        )
+    rating = payload.rating if payload.rating in ("positive", "negative") else None
+    await asyncio.to_thread(service.set_feedback, payload.message_id, rating)
+    return {"ok": True, "message_id": payload.message_id, "rating": rating}
+
+
 @_web_router.get("/web/api/conversations/{conversation_id}/messages")
 async def web_messages(conversation_id: str, session: dict = Depends(_web_session)):
     if not any(cid == conversation_id for cid, _, _ in service.conversations()):
         raise HTTPException(status_code=404, detail="Conversa não encontrada.")
-    messages = await asyncio.to_thread(service.history, conversation_id, 100)
-    return {
-        "conversation_id": conversation_id,
-        "messages": [{"role": role, "content": content} for role, content in messages],
-    }
+    if conversation_id != session.get("active", "default"):
+        raise HTTPException(status_code=403, detail="Conversa não pertence à sessão ativa.")
+    messages = await asyncio.to_thread(service.history_extended, conversation_id, 100)
+    return {"conversation_id": conversation_id, "messages": messages}
+
+
+@_web_router.get("/web/api/conversations")
+async def web_conversations_list(session: dict = Depends(_web_session)) -> dict[str, object]:
+    """Lista as conversas persistidas. O desktop usa esta lista no seletor."""
+    conversations = [
+        {"id": str(cid), "title": str(title)} for cid, title, *_ in service.conversations()
+    ]
+    return {"conversations": conversations}
 
 
 @_web_router.post("/web/api/conversations")
@@ -1361,6 +1407,39 @@ async def web_new_conversation(session: dict = Depends(_web_session)):
     conversation_id = service.create_conversation()
     session["active"] = conversation_id
     return {"id": conversation_id, "title": "Nova conversa"}
+
+
+@_web_router.post("/web/api/conversations/{conversation_id}/fork")
+async def web_fork_conversation(
+    conversation_id: str, body: dict, session: dict = Depends(_web_session)
+):
+    conversations = service.conversations()
+    source = next((item for item in conversations if item[0] == conversation_id), None)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Conversa de origem não encontrada.")
+    supplied = body.get("messages")
+    if not isinstance(supplied, list) or len(supplied) > 100:
+        raise HTTPException(status_code=422, detail="Histórico inválido para ramificação.")
+    normalized: list[tuple[str, str]] = []
+    total_chars = 0
+    for item in supplied:
+        if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
+            raise HTTPException(status_code=422, detail="Mensagem inválida para ramificação.")
+        content = item.get("content")
+        if not isinstance(content, str) or len(content) > 100_000:
+            raise HTTPException(status_code=422, detail="Conteúdo inválido para ramificação.")
+        total_chars += len(content)
+        if total_chars > 500_000:
+            raise HTTPException(status_code=413, detail="Histórico excede o limite de ramificação.")
+        normalized.append((item["role"], content))
+    try:
+        branch_id = await asyncio.to_thread(
+            service.fork_conversation, conversation_id, normalized, source[1]
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    session["active"] = branch_id
+    return {"id": branch_id, "title": f"Ramificação · {source[1]}"}
 
 
 @_web_router.post("/web/api/conversations/{conversation_id}/select")
@@ -1394,7 +1473,7 @@ async def web_delete_conversation(conversation_id: str, session: dict = Depends(
 
 @_web_router.post("/web/api/chat")
 async def web_chat(body: dict, request: Request, session: dict = Depends(_web_session)):
-    text = body.get("message")
+    text = body.get("message") or body.get("prompt")
     conversation_id = body.get("conversation_id") or session.get("active")
     if not isinstance(text, str) or not text.strip() or len(text) > 12000:
         raise HTTPException(
@@ -1448,6 +1527,7 @@ async def web_chat(body: dict, request: Request, session: dict = Depends(_web_se
             )
         )
 
+    service.clear_last_saved_turn(conversation_id)
     task = asyncio.create_task(
         orchestrator.process_request(
             text.strip(),
@@ -1474,15 +1554,24 @@ async def web_chat(body: dict, request: Request, session: dict = Depends(_web_se
                     kind, payload = await asyncio.wait_for(queue.get(), timeout=0.2)
                     if kind == "token":
                         sent_tokens += 1
-                        yield packet(kind, {"text": payload})
+                        yield packet("chunk", {"text": payload})
                     else:
                         yield packet(kind, payload)
                 except TimeoutError:
                     continue
             answer = await task
             if sent_tokens == 0 and answer:
-                yield packet("token", {"text": answer})
-            yield packet("done", {"ok": True, "conversation_id": conversation_id})
+                yield packet("chunk", {"text": answer})
+            saved_turn = service.get_last_saved_turn(conversation_id, task)
+            assistant_message_id = saved_turn[1] if saved_turn else None
+            yield packet(
+                "done",
+                {
+                    "ok": True,
+                    "conversation_id": conversation_id,
+                    "message_id": assistant_message_id,
+                },
+            )
         except asyncio.CancelledError:
             if not task.done():
                 task.cancel()
@@ -1506,8 +1595,7 @@ async def web_chat(body: dict, request: Request, session: dict = Depends(_web_se
                 )
             elif "conectar ao ollama" in detail or "conectar ao provedor" in detail:
                 message = (
-                    "Não consegui alcançar o Ollama. "
-                    "Verifique se o serviço local continua ativo."
+                    "Não consegui alcançar o Ollama. Verifique se o serviço local continua ativo."
                 )
             else:
                 message = (

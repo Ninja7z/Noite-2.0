@@ -1,0 +1,107 @@
+/**
+ * Noite Desktop 2.0 - Estilos do Mascote Flutuante.
+ */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.mascot-container {
+  width: 148px;
+  height: 148px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  -webkit-app-region: drag; /* Permite arrastar no Windows */
+  cursor: grab;
+}
+
+.mascot-container:active {
+  cursor: grabbing;
+}
+
+.robot-wrapper {
+  position: relative;
+  width: 116px;
+  height: 116px;
+  animation: mascot-float 3.6s ease-in-out infinite;
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.45));
+  transition: transform 0.2s ease;
+}
+
+.robot-wrapper:hover {
+  transform: scale(1.05);
+}
+
+#robotCanvas {
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  -webkit-app-region: no-drag; /* Cliques diretos no robô disparam ações */
+  cursor: pointer;
+}
+
+/* Animação suave de flutuação */
+@keyframes mascot-float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+/* Balãozinho de fala / status */
+.speech-bubble {
+  position: absolute;
+  top: 2px;
+  background: rgba(18, 22, 34, 0.94);
+  border: 1px solid rgba(110, 168, 254, 0.35);
+  border-radius: 12px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #dce6ff;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(8px);
+}
+
+.speech-bubble.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Indicador de clique rápido */
+.click-hint {
+  position: absolute;
+  bottom: 0;
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.4);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.mascot-container:hover .click-hint {
+  opacity: 1;
+}

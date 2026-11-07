@@ -1,21 +1,41 @@
 <!doctype html>
 <html lang="pt-BR" data-mode="landing" data-sidebar="auto" data-activity="auto">
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0b0b11">
   <meta name="description" content="Noite: assistente local que faz tarefas no seu computador e confere o resultado.">
   <title>Noite</title>
   <script src="assets/boot.js"></script>
-  <link rel="stylesheet" href="assets/app.css">
+  <link rel="stylesheet" href="assets/app.css?v=20261106-feedback-v1">
   <link rel="stylesheet" href="assets/landing.css">
   <link rel="stylesheet" href="assets/interface.css">
+  <link rel="stylesheet" href="assets/vendor/github-dark.min.css">
   <link rel="stylesheet" href="assets/ux-state.css?v=20261106-ux1">
-  <script src="assets/app.js?v=20261106-ux1" defer></script>
+  <script src="assets/vendor/purify.min.js" defer></script>
+  <script src="assets/vendor/marked.min.js" defer></script>
+  <script src="assets/vendor/highlight.min.js" defer></script>
+  <script src="assets/app.js?v=20261106-feedback-v1" defer></script>
   <script src="assets/interface.js" defer></script>
   <script src="assets/landing.js" defer></script>
   <script src="assets/voice.js" defer></script>
   <script src="assets/dynamic.js" defer></script>
+  <style>
+    .message-text{white-space:normal;overflow-wrap:anywhere}
+    .message-text p{margin:.35em 0 .8em}.message-text p:last-child{margin-bottom:0}
+    .message-text ul,.message-text ol{padding-left:1.5em;margin:.5em 0}
+    .message-text blockquote{margin:.7em 0;padding:.15em .9em;border-left:3px solid var(--accent,#8b7cf6);color:var(--muted,#a0a4b8)}
+    .message-text :not(pre)>code{padding:.12em .38em;border-radius:5px;background:rgba(130,135,160,.16);font-family:Consolas,monospace;font-size:.9em}
+    .message-text pre{position:relative;margin:.85em 0;padding:0;border:1px solid rgba(145,150,180,.2);border-radius:10px;overflow:auto;background:#0d1117;white-space:pre}
+    .message-text pre code{display:block;padding:14px 16px;white-space:pre;overflow-x:auto;font:13px/1.6 Consolas,monospace}
+    .code-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 10px;border-bottom:1px solid rgba(145,150,180,.16);background:#151b23;color:#9da7b3;font:11px/1.2 system-ui,sans-serif}
+    .code-language{text-transform:lowercase;letter-spacing:.04em}
+    .code-copy{border:1px solid rgba(145,150,180,.28);border-radius:6px;padding:4px 9px;background:#202833;color:#d7dde5;font:11px system-ui,sans-serif;cursor:pointer}
+    .code-copy:hover{background:#2b3542}.code-copy.copied{color:#7ee0a1;border-color:#397b55}
+    .message-text table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse}
+    .message-text th,.message-text td{padding:6px 9px;border:1px solid rgba(145,150,180,.22)}
+    .message-text a{color:#9cbdff;text-decoration:underline}
+  </style>
 </head>
 <body>
 
@@ -182,8 +202,15 @@
             <textarea id="message-input" rows="1" maxlength="12000" placeholder="Peça qualquer coisa à Noite" aria-label="Sua mensagem"></textarea>
             <div class="composer-bottom">
               <div class="composer-actions">
-                <button class="icon-btn mic-btn is-soon" id="mic-btn" type="button" aria-label="Falar com a Noite (em breve)" title="Voz: em breve">🎤</button>
-                <button class="send-btn" id="send-btn" type="submit" aria-label="Enviar mensagem">↑</button>
+                <button class="icon-btn mic-btn is-soon" id="mic-btn" type="button" aria-label="Falar com a Noite (em breve)" title="Voz: em breve">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                </button>
+                <button class="icon-btn paste-btn" id="paste-btn" type="button" aria-label="Colar da &#225;rea de transfer&#234;ncia" title="Colar da &#225;rea de transfer&#234;ncia (Ctrl+V)">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>
+                </button>
+                <button class="send-btn" id="send-btn" type="submit" aria-label="Enviar mensagem">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+                </button>
               </div>
             </div>
           </form>

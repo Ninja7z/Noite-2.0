@@ -345,33 +345,59 @@ async def ask_gemini_model(
     api_key = (settings.gemini_api_key or "").strip()
     if not api_key:
         raise RuntimeError("Chave Gemini ausente. Configure GEMINI_API_KEY no ambiente da Noite.")
-    response = await acompletion(
-        model=settings.gemini_model,
-        api_key=api_key,
-        messages=list(messages),
-        stream=on_chunk is not None,
-        timeout=settings.glm_timeout_seconds,
-        num_retries=1,
-    )
-    if on_chunk is None:
-        content = response.choices[0].message.content
-        answer = content if isinstance(content, str) else ""
-    else:
-        parts: list[str] = []
-        async for chunk in response:
-            choices = getattr(chunk, "choices", ())
-            if not choices:
-                continue
-            delta = getattr(choices[0], "delta", None)
-            content = getattr(delta, "content", None)
-            if isinstance(content, str) and content:
-                parts.append(content)
-                on_chunk(content)
-        answer = "".join(parts)
-    if not answer.strip():
-        raise RuntimeError("O Gemini retornou uma resposta vazia.")
-    logger.info("model_call provider=gemini model=%s status=ok", settings.gemini_model)
-    return answer
+    try:
+        response = await acompletion(
+            model=settings.gemini_model,
+            api_key=api_key,
+            messages=list(messages),
+            stream=on_chunk is not None,
+            timeout=settings.gemini_timeout_seconds,
+            num_retries=settings.gemini_max_retries,
+        )
+        if on_chunk is None:
+            content = response.choices[0].message.content
+            answer = content if isinstance(content, str) else ""
+        else:
+            parts: list[str] = []
+            async for chunk in response:
+                choices = getattr(chunk, "choices", ())
+                if not choices:
+                    continue
+                delta = getattr(choices[0], "delta", None)
+                content = getattr(delta, "content", None)
+                if isinstance(content, str) and content:
+                    parts.append(content)
+                    on_chunk(content)
+            answer = "".join(parts)
+        if not answer.strip():
+            raise RuntimeError("O Gemini retornou uma resposta vazia.")
+        logger.info("model_call provider=gemini model=%s status=ok", settings.gemini_model)
+        return answer
+    except Exception as exc:
+        err_type = type(exc).__name__
+        err_str = str(exc)
+        err_lower = err_str.lower()
+        if (
+            "503" in err_str
+            or "serviceunavailable" in err_lower
+            or "serviceunavailable" in err_type.lower()
+            or "overloaded" in err_lower
+        ):
+            raise RuntimeError(
+                "O provedor Gemini está temporariamente sobrecarregado "
+                "(503). Tente novamente em alguns segundos."
+            ) from None
+        if "timeout" in err_lower or "timed out" in err_lower or "timeout" in err_type.lower():
+            raise RuntimeError(
+                f"Tempo limite esgotado ({settings.gemini_timeout_seconds}s) "
+                "na comunicação com o Gemini."
+            ) from None
+        if "rate" in err_lower and "limit" in err_lower:
+            raise RuntimeError(
+                "Limite de requisições do Gemini atingido. Aguarde um momento antes de reenviar."
+            ) from None
+        clean_msg = err_str.replace(api_key, "[REDACTED]") if api_key else err_str
+        raise RuntimeError(f"Falha no provedor Gemini ({err_type}): {clean_msg}") from None
 
 
 async def ask_glm_model(

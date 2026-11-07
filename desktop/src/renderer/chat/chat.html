@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:8766 http://localhost:8766;">
+  <title>Noite 2.0 Desktop</title>
+  <link rel="stylesheet" href="../shared/vendor/github-dark.min.css">
+  <link rel="stylesheet" href="chat.css">
+</head>
+<body>
+  <!-- Custom Desktop Titlebar -->
+  <header class="desktop-titlebar">
+    <div class="titlebar-drag">
+      <div class="app-brand">
+        <span class="status-indicator is-online" id="globalStatusDot"></span>
+        <span class="app-title">Noite 2.0</span>
+        <span class="app-subtitle" id="currentModelBadge">Local: qwen2.5:3b</span>
+      </div>
+    </div>
+    <div class="window-controls">
+      <button class="win-btn" id="btnMinimize" title="Minimizar">
+        <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 6h8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      </button>
+      <button class="win-btn" id="btnMaximize" title="Maximizar / Restaurar">
+        <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/></svg>
+      </button>
+      <button class="win-btn win-btn-close" id="btnClose" title="Fechar">
+        <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="app-body">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <button class="new-chat-btn" id="btnNewChat">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 2a.75.75 0 0 1 .75.75v4.5h4.5a.75.75 0 0 1 0 1.5h-4.5v4.5a.75.75 0 0 1-1.5 0v-4.5h-4.5a.75.75 0 0 1 0-1.5h4.5v-4.5A.75.75 0 0 1 8 2Z"/>
+          </svg>
+          <span>Nova Conversa</span>
+        </button>
+      </div>
+
+      <div class="conversations-scroll" id="conversationsList">
+        <!-- Renderizado dinamicamente -->
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="backend-status-card" id="backendStatusCard">
+          <div class="backend-status-dot"></div>
+          <div class="backend-status-text">
+            <div class="status-name" id="backendStatusName">Verificando backend...</div>
+            <div class="status-sub" id="backendStatusSub">Porta 8766</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="chat-main">
+      <!-- Banner de Backend Desconectado -->
+      <div class="offline-banner is-hidden" id="offlineBanner">
+        <span>O serviço local da Noite não está respondendo na porta 8766.</span>
+        <button class="retry-btn" id="btnRetryConnection">Reconectar</button>
+      </div>
+
+      <!-- Área de Rolagem de Mensagens -->
+      <div class="messages-container" id="messagesContainer">
+        <div class="messages-empty" id="emptyPlaceholder">
+          <div class="empty-icon">
+            <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#46bfff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2 2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/>
+              <rect x="4" y="8" width="16" height="12" rx="3"/>
+              <path d="M9 13v2M15 13v2"/>
+            </svg>
+          </div>
+          <h2>Como posso ajudar agora?</h2>
+          <p>Selecione um tópico ou digite uma solicitação de código, projeto ou raciocínio.</p>
+        </div>
+      </div>
+
+      <!-- Barra de Atividades em Tempo Real -->
+      <div class="activity-strip is-hidden" id="activityStrip">
+        <span class="activity-spinner"></span>
+        <span class="activity-text" id="activityText">Processando...</span>
+      </div>
+
+      <!-- Compositor Flutuante ("Floating Island") -->
+      <div class="composer-island">
+        <div class="composer-inner">
+          <textarea
+            id="promptInput"
+            class="composer-textarea"
+            placeholder="Pergunte à Noite... (Enter envia, Shift+Enter pula linha)"
+            rows="1"
+          ></textarea>
+          <div class="composer-controls">
+            <button class="tool-btn" id="btnPaste" title="Colar da área de transferência">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+              </svg>
+            </button>
+            <button class="stop-btn is-hidden" id="btnStop" title="Interromper geração">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <rect x="3" y="3" width="10" height="10" rx="2"/>
+              </svg>
+            </button>
+            <button class="send-btn" id="btnSend" title="Enviar mensagem">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13"/>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <!-- Scripts locais -->
+  <script src="../shared/vendor/marked.min.js"></script>
+  <script src="../shared/vendor/purify.min.js"></script>
+  <script src="../shared/vendor/highlight.min.js"></script>
+  <script src="chat.js"></script>
+</body>
+</html>

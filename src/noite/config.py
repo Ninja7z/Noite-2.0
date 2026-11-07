@@ -42,6 +42,8 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY", "gemini_api_key"),
         repr=False,
     )
+    gemini_timeout_seconds: int = Field(default=30, ge=1, le=600)
+    gemini_max_retries: int = Field(default=0, ge=0, le=2)
 
     @field_validator("workspace_dir", mode="before")
     @classmethod

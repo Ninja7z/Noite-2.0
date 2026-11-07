@@ -249,3 +249,147 @@ html[data-mode="app"] .landing{display:none}
 @media(max-width:560px){
   .provider-menu{right:-8px;width:min(292px,calc(100vw - 24px))}
 }
+
+
+/* Prompt 11: pensamento, ações de mensagem e microinterações */
+.message-content{min-width:0}
+.message-text{min-width:0}
+.message-markdown{overflow-wrap:anywhere}
+.thinking-container{
+  margin:0 0 12px;padding:9px 12px;border:1px solid rgba(255,255,255,.06);
+  border-radius:11px;background:rgba(255,255,255,.025);color:var(--muted);
+  font-size:12px;line-height:1.65
+}
+.thinking-header{
+  display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;
+  color:var(--muted);font-size:12px;font-weight:550;user-select:none
+}
+.thinking-header::-webkit-details-marker{display:none}
+.thinking-icon{display:inline-grid;place-items:center;width:17px;height:17px;color:var(--accent);font-size:16px}
+.thinking-header:after{content:"⌄";margin-left:auto;opacity:.55;transition:transform .15s ease}
+.thinking-container[open] .thinking-header:after{transform:rotate(180deg)}
+.thinking-content{
+  padding:9px 0 2px 25px;color:var(--faint);font-size:12px;line-height:1.65;
+  white-space:pre-wrap;overflow-wrap:anywhere
+}
+.message-actions{
+  display:flex;align-items:center;gap:5px;margin-top:10px;min-height:28px;
+  opacity:.68;transition:opacity .15s ease
+}
+.message:hover .message-actions,.message-actions:focus-within{opacity:1}
+.message-action{
+  width:29px;height:28px;display:inline-grid;place-items:center;padding:0;
+  border:1px solid transparent;border-radius:7px;background:transparent;
+  color:var(--muted);cursor:pointer;transition:background .15s ease,color .15s ease,border-color .15s ease,transform .15s ease
+}
+.message-action:hover{background:var(--raised);border-color:rgba(255,255,255,.08);color:var(--text);transform:translateY(-1px)}
+.message-action.is-success,.message-action.is-selected{color:var(--accent);background:rgba(169,155,255,.09);border-color:rgba(169,155,255,.16)}
+.message-action svg{display:block;pointer-events:none}
+.message.user .message-actions{display:none}
+@media(max-width:560px){.message-actions{opacity:1}.message-action{width:32px;height:30px}}
+
+/* ==========================================================================
+   CODEX CODE BLOCKS & TOOLBAR
+   ========================================================================== */
+.message-markdown pre {
+  position: relative;
+  margin: 12px 0;
+  padding: 0;
+  background: #0e1116;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.message-markdown pre .code-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.035);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  user-select: none;
+}
+.message-markdown pre .code-language {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted, #8b949e);
+}
+.message-markdown pre .code-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  font-family: inherit;
+  color: var(--muted, #8b949e);
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+.message-markdown pre .code-copy:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: var(--text, #f0f6fc);
+}
+.message-markdown pre .code-copy.copied {
+  color: #3fb950;
+  background: rgba(63, 185, 80, 0.1);
+  border-color: rgba(63, 185, 80, 0.25);
+}
+.message-markdown pre code {
+  display: block;
+  padding: 12px 14px;
+  margin: 0;
+  overflow-x: auto;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: #e6edf3;
+  background: transparent !important;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+.message-markdown pre code::-webkit-scrollbar { height: 6px; }
+.message-markdown pre code::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+.message-markdown pre code::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+.message-markdown :not(pre) > code {
+  padding: 2px 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  color: #f0883e;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+}
+@media (max-width: 560px) {
+  .message-markdown pre { margin: 8px 0; border-radius: 7px; }
+  .message-markdown pre .code-toolbar { padding: 5px 10px; }
+  .message-markdown pre .code-copy { padding: 4px 9px; font-size: 11px; }
+  .message-markdown pre code { padding: 10px 12px; font-size: 12px; }
+}
+
+
+/* Composer action icons and clipboard feedback */
+.composer-actions { display:flex; align-items:center; gap:6px; }
+.composer-actions button svg { display:block; pointer-events:none; }
+.paste-btn { width:32px; height:32px; display:inline-grid; place-items:center; padding:0; color:var(--muted,#8b949e); background:transparent; border:1px solid transparent; border-radius:8px; cursor:pointer; transition:all .15s ease; }
+.paste-btn:hover { color:var(--text,#f0f6fc); background:var(--raised,rgba(255,255,255,.08)); border-color:rgba(255,255,255,.08); transform:translateY(-1px); }
+.paste-btn.is-success { color:#3fb950 !important; background:rgba(63,185,80,.12) !important; border-color:rgba(63,185,80,.25) !important; }
+.send-btn svg,.mic-btn svg { flex:none; }
+
+
+/* NOITE_FEEDBACK_CODEX_POLISH */
+.message.user .message-content { text-align:left; padding:10px 16px; border:1px solid rgba(255,255,255,.09); border-radius:16px 16px 4px 16px; background:linear-gradient(145deg,rgba(255,255,255,.075),rgba(255,255,255,.035)); box-shadow:0 5px 18px rgba(0,0,0,.14); }
+.composer { background:rgba(24,27,34,.88); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); box-shadow:0 10px 30px rgba(0,0,0,.22); }
+.composer textarea { scrollbar-width:none; }
+.composer textarea::-webkit-scrollbar { display:none; }

@@ -19,8 +19,10 @@ from fastapi.testclient import TestClient  # noqa: E402
 def web_client(tmp_path, monkeypatch):
     monkeypatch.setattr(noite_api.service, "database_path", tmp_path / "web.sqlite3")
     monkeypatch.setattr(noite_api.service.settings, "provider_mode", "nightly")
+
     async def ollama_ready():
         return True, True
+
     monkeypatch.setattr(noite_api, "_ollama_health", ollama_ready)
     with TestClient(noite_api.app, base_url="http://127.0.0.1") as client:
         yield client
@@ -50,10 +52,13 @@ def test_web_shell_assets_and_session_security(web_client: TestClient) -> None:
     assert "samesite=strict" in cookie
 
     assert web_client.post("/web/api/conversations").status_code == 403
-    assert web_client.post(
-        "/web/api/conversations",
-        headers={"X-Noite-CSRF": session.json()["csrf"], "Origin": "http://evil.example"},
-    ).status_code == 403
+    assert (
+        web_client.post(
+            "/web/api/conversations",
+            headers={"X-Noite-CSRF": session.json()["csrf"], "Origin": "http://evil.example"},
+        ).status_code
+        == 403
+    )
 
     hostile_host = TestClient(noite_api.app, base_url="http://evil.example")
     assert hostile_host.get("/").status_code == 400
@@ -74,15 +79,17 @@ def test_web_chat_stream_and_conversation_lifecycle(web_client: TestClient) -> N
         headers=headers,
     )
     assert response.status_code == 200
-    assert "event: token" in response.text
+    assert "event: chunk" in response.text
     assert "Noite 2.0" in response.text
     assert "event: done" in response.text
+    assert '"message_id":' in response.text
 
-    history = web_client.get(
-        f"/web/api/conversations/{conversation_id}/messages"
-    )
+    history = web_client.get(f"/web/api/conversations/{conversation_id}/messages")
     assert history.status_code == 200
-    assert [item["role"] for item in history.json()["messages"]] == ["user", "assistant"]
+    messages = history.json()["messages"]
+    assert [item["role"] for item in messages] == ["user", "assistant"]
+    assert all(isinstance(item.get("id"), int) and item["id"] > 0 for item in messages)
+    assert messages[-1]["rating"] is None
 
     renamed = web_client.patch(
         f"/web/api/conversations/{conversation_id}",
@@ -98,11 +105,13 @@ def test_web_chat_stream_and_conversation_lifecycle(web_client: TestClient) -> N
     assert deleted.status_code == 200
     assert deleted.json()["active_conversation_id"] != conversation_id
 
+
 def test_web_chat_reports_ollama_offline_before_starting_generation(
     web_client: TestClient, monkeypatch
 ) -> None:
     async def ollama_offline():
         return False, False
+
     monkeypatch.setattr(noite_api, "_ollama_health", ollama_offline)
     headers = _session(web_client)
     created = web_client.post("/web/api/conversations", headers=headers)

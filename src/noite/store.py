@@ -129,6 +129,15 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             (active_id,),
         )
 
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS message_feedback (
+            message_id INTEGER PRIMARY KEY,
+            rating TEXT NOT NULL CHECK (rating IN ('positive', 'negative')),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+        )"""
+    )
+
 
 def create_conversation(
     connection: sqlite3.Connection,
@@ -274,6 +283,48 @@ def recent_messages(
         (conversation_id, limit),
     ).fetchall()
     return [(str(role), str(content)) for role, content in reversed(rows)]
+
+
+def set_message_feedback(
+    connection: sqlite3.Connection, message_id: int, rating: str | None
+) -> None:
+    """Cria, atualiza ou remove o feedback de uma mensagem."""
+    if rating not in (None, "positive", "negative"):
+        raise ValueError("Rating inválido.")
+    if rating is None:
+        connection.execute("DELETE FROM message_feedback WHERE message_id = ?", (message_id,))
+    else:
+        connection.execute(
+            """INSERT INTO message_feedback(message_id, rating)
+               VALUES (?, ?)
+               ON CONFLICT(message_id) DO UPDATE SET
+                   rating=excluded.rating,
+                   created_at=CURRENT_TIMESTAMP""",
+            (message_id, rating),
+        )
+
+
+def recent_messages_extended(
+    connection: sqlite3.Connection, conversation_id: str = "default", limit: int = 100
+) -> list[dict]:
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("O limite de resultados deve ficar entre 1 e 100.")
+    rows = connection.execute(
+        """SELECT m.id,m.role,m.content,m.created_at,f.rating FROM messages m
+           LEFT JOIN message_feedback f ON f.message_id=m.id
+           WHERE m.conversation_id=? ORDER BY m.id DESC LIMIT ?""",
+        (conversation_id, limit),
+    ).fetchall()
+    return [
+        {
+            "id": int(r[0]),
+            "role": str(r[1]),
+            "content": str(r[2]),
+            "created_at": str(r[3]),
+            "rating": str(r[4]) if r[4] is not None else None,
+        }
+        for r in reversed(rows)
+    ]
 
 
 def search_messages(connection: sqlite3.Connection, query: str, limit: int = 10) -> list[str]:

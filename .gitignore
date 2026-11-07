@@ -9,3 +9,12 @@ dist/
 *.egg-info/
 .ruff_cache/
 .pytest_cache/
+
+# Local dependencies, temporary output and recovery backups
+**/node_modules/
+Temporarios/
+_backups/
+.env.*
+!.env.example
+*.bak
+*.bak.*
